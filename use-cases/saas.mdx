@@ -1,0 +1,55 @@
+---
+title: "Database Observability for Multi-Tenant SaaS Products"
+sidebarTitle: "SaaS"
+description: "QueryComment helps SaaS teams detect noisy neighbor queries, migration regressions, and connection pool exhaustion before they degrade tenant experience."
+---
+
+Running a multi-tenant SaaS product means your database is doing the work of hundreds of customers simultaneously — and when something goes wrong, it rarely affects everyone equally. The tenants who notice first are usually your largest, highest-value accounts. By the time they file a support ticket, you're already behind. QueryComment gives you the per-tenant visibility and causal reasoning to catch degradation before it becomes a customer conversation.
+
+## Multi-tenancy makes everything harder
+
+The noisy neighbor problem is subtle because aggregate metrics actively hide it. Your p99 query latency looks acceptable — because 95% of your tenants have small datasets and fast queries. But your top three accounts, the ones paying enterprise contracts, are experiencing 10x worse latency. The averages wash it away.
+
+Traditional monitoring tools are built around aggregate signals. They tell you that your `users` table lookup is averaging 4ms. They don't tell you that for your three largest tenants, that same query is running at 40ms because their datasets have crossed an index selectivity threshold that smaller tenants never reach.
+
+QueryComment breaks down query performance by tenant-relevant dimensions. Instead of a single latency number per query, you see execution behavior segmented by the dimensions that actually matter for your workload — data volume, index cardinality, buffer cache residency. When one tenant's query pattern starts diverging from the baseline, you know immediately, not after their VP of Engineering emails yours.
+
+<Note>
+  Noisy neighbor issues are especially dangerous because they're invisible in aggregate dashboards. If you're operating a B2B SaaS product, your largest tenants are almost always the ones most at risk — and the least tolerant of degradation.
+</Note>
+
+## Schema migrations are your biggest risk
+
+Staging doesn't lie to you on purpose — it just doesn't know what production looks like. Your staging environment has 100,000 rows in the transactions table. Production has 500 million. The migration runs fine in staging. In production, the index build takes 45 minutes.
+
+During those 45 minutes, autovacuum can't access the table. Dead tuples accumulate faster than vacuum can clean them. Queries that relied on HOT (Heap Only Tuple) updates start generating bloat instead. Three days after the migration lands, your largest tenants start reporting slowness — and your on-call engineer is staring at a dashboard that shows nothing obviously wrong, because the degradation built up gradually and sits just below your alert thresholds.
+
+QueryComment watches the moment a migration lands. Every query plan change that follows is captured and attributed. Shifts in engine metrics — autovacuum activity, dead tuple rate, buffer hit ratio — are correlated with the deployment event. Infrastructure impact shows up in the same view.
+
+<Warning>
+  If an index you add causes a completely different query to switch from an index scan to a sequential scan, QueryComment flags that regression within minutes — even if the query in question isn't one you were thinking about when you wrote the migration.
+</Warning>
+
+This is the part that catches teams off guard: migrations have second-order effects. Adding an index changes the query planner's cost estimates for queries across the entire table. A migration that looks surgical can shift execution plans for queries you didn't touch. QueryComment traces those causal chains so you're not debugging them three days later.
+
+## Connection pool exhaustion during migrations
+
+Schema migrations that require exclusive locks — even briefly — can cascade in ways that feel disproportionate to the lock duration. An exclusive lock held for three seconds causes inbound queries to queue. In a multi-tenant system with shared connection pools, that queue builds across every tenant simultaneously. Connection pool slots fill. Queries that have nothing to do with your migration start timing out. Users across every tier of your product see errors.
+
+QueryComment correlates lock wait events with connection pool saturation so you can see the cascade as it builds, not after the pool is exhausted. You get the specific query holding the lock, the queries waiting on it, and the downstream connection pool impact — all in a single causal chain.
+
+<Info>
+  Connection pool exhaustion during migrations is one of the most common causes of multi-tenant incidents. It's also one of the most preventable — if you can see the lock acquisition pattern before the pool saturates.
+</Info>
+
+## Scaling without losing visibility
+
+As your tenant count grows, query cardinality explodes. The same logical query — a lookup against your core data model — generates thousands of distinct execution patterns depending on data volume per tenant, index selectivity, and buffer cache state. Monitoring systems that track queries by raw text or even normalized fingerprint start producing noise instead of signal.
+
+As data volume grows per tenant, individual queries hit inflection points. A query that runs in 2ms at 10 million rows may start running in 200ms at 100 million rows, not because anything changed in your application or schema, but because it crossed a threshold where the planner's cost model shifts. That inflection point arrives at different times for different tenants.
+
+QueryComment normalizes query patterns and segments execution behavior by the dimensions that explain variance. You don't have to manually correlate tenant size with query latency — the platform surfaces which tenants are approaching inflection points before they cross them.
+
+<Tip>
+  QueryComment's drift detection gives you an early warning window — usually days, not hours — before a degrading query crosses your alert threshold. That window is exactly when your team can fix the problem quietly, before your enterprise customers notice and before you're debugging a production incident at midnight.
+</Tip>

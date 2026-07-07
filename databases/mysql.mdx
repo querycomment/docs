@@ -1,0 +1,207 @@
+---
+title: "MySQL Monitoring and Observability with QueryComment"
+sidebarTitle: "MySQL"
+description: "Connect QueryComment to your MySQL database for three-layer observability that goes beyond slow query logs to detect regressions, InnoDB internals, and infrastructure issues."
+---
+
+The MySQL slow query log uses a static latency threshold — any query faster than that threshold is invisible, regardless of how much it has regressed. A query that took 5ms last month and takes 900ms today never appears in the log if your threshold is set to 1 second. QueryComment takes a different approach: it baselines every normalized query fingerprint from `performance_schema`, detects statistically significant regressions against that baseline, and correlates query behavior with InnoDB engine state and infrastructure metrics so you understand not just that a query slowed down, but exactly why.
+
+## Why MySQL monitoring needs more than slow query log parsing
+
+The fundamental problem with the slow query log is its static threshold. Set the threshold too low and the log fills up with noise. Set it too high and a 180x regression — a query moving from 5ms to 900ms — is completely invisible. Even when the threshold is tuned well, the log gives you latency and row counts but nothing about the cause: did the optimizer pick a worse index after a schema change? Is the query waiting on a metadata lock? Did an InnoDB buffer pool miss force a disk read?
+
+Tools that parse the slow query log inherit these limitations. They can aggregate and rank slow queries, but they cannot detect gradual regressions that stay below threshold, and they give you no context from InnoDB internals or OS-level resource usage. You end up investigating incidents by manually correlating `SHOW ENGINE INNODB STATUS`, `SHOW REPLICA STATUS`, and whatever infrastructure metrics your cloud provider exposes — after the problem has already impacted users.
+
+QueryComment reads `performance_schema` continuously, baselines per-fingerprint performance without any threshold configuration, and joins query signals with InnoDB and infrastructure data automatically.
+
+## Common MySQL pain points we solve
+
+<AccordionGroup>
+  <Accordion title="Slow query log's static threshold problem">
+    A query regressing from 5ms to 900ms is a 180x degradation. If your slow query log threshold is 1 second, this regression is completely invisible. QueryComment baselines every query fingerprint at the `performance_schema` level and alerts on regression from that baseline — no threshold to configure, no regression left undetected.
+  </Accordion>
+
+  <Accordion title="Query plan regressions after schema changes or data growth">
+    The MySQL optimizer chooses execution plans based on table statistics. After a schema change, a new index, or significant data growth, the optimizer can choose a worse plan — picking a full table scan over an existing index, or selecting a less selective index because statistics have not been updated. QueryComment correlates latency regressions with schema change events and tracks rows examined vs. rows sent as a proxy for plan quality, flagging fingerprints where the ratio changes significantly.
+  </Accordion>
+
+  <Accordion title="InnoDB buffer pool misses causing disk I/O storms">
+    When the buffer pool cannot hold the working set, reads go to disk. On cloud instances with network-attached storage, a single large query doing a full table scan can saturate disk I/O and degrade every other query on the instance. QueryComment tracks buffer pool hit ratio, pages read from disk, and disk I/O metrics together, and surfaces queries responsible for elevated physical reads at the time of an I/O event.
+  </Accordion>
+
+  <Accordion title="Thread contention and connection exhaustion">
+    MySQL hits `max_connections`. New connection attempts fail with "Too many connections." Meanwhile, `SHOW PROCESSLIST` shows dozens of threads in `Waiting for table metadata lock` or `Waiting for table level lock`. The database has capacity but threads cannot make progress. QueryComment monitors thread state distribution continuously from `performance_schema`, surfaces the blocking query and session holding the metadata lock, and tracks connection utilization over time so you can identify the workload patterns causing exhaustion before they become incidents.
+  </Accordion>
+
+  <Accordion title="Silent deadlocks exhausting retry budgets">
+    InnoDB rolls back the transaction with the smallest undo log when a deadlock is detected. Your application retries. If deadlocks are infrequent and retry logic is correct, this is invisible — until retry budget is exhausted during a traffic spike and requests start failing. QueryComment monitors the InnoDB deadlock counter from `SHOW ENGINE INNODB STATUS` and `INNODB_METRICS`, tracks deadlock frequency as a timeseries, and surfaces the queries and tables involved so you can eliminate the deadlock pattern rather than just tuning retry behavior.
+  </Accordion>
+
+  <Accordion title="Long-running transactions growing the history list">
+    A long-running transaction holds row locks and prevents InnoDB's purge thread from cleaning up undo log entries. The InnoDB history list length grows. Read performance degrades as InnoDB must traverse longer undo chains to reconstruct consistent snapshots for other transactions. QueryComment monitors history list length from `INNODB_METRICS` as a timeseries, correlates growth events with active long-running transactions, and alerts before the history list reaches a size that causes widespread read degradation.
+  </Accordion>
+</AccordionGroup>
+
+## What QueryComment monitors in MySQL
+
+### Query layer
+
+QueryComment reads `performance_schema.events_statements_summary_by_digest` for every normalized query fingerprint. For each fingerprint it tracks:
+
+- Execution count and error count
+- Total, mean, and p95 latency
+- Rows examined vs. rows sent (a high ratio indicates unnecessary work — full scans, inefficient joins, or poor index selectivity)
+- Sort operations and sort merge passes
+- Temporary table creation (on-disk vs. in-memory)
+- Full scan counts
+
+QueryComment establishes a rolling baseline per fingerprint and detects regressions against that baseline continuously. Because baselines are per-fingerprint rather than global, a regression in one query pattern is not masked by stable behavior in others.
+
+Alongside statement summaries, QueryComment reads `performance_schema.events_waits_summary_global_by_event_name` to identify where thread time is actually being spent: I/O waits, lock waits, mutex contention, network waits, or InnoDB internal waits. This tells you whether a latency regression is caused by more work (higher rows examined) or more waiting (lock or I/O wait time growing) — a distinction that points to entirely different remediation paths.
+
+### Engine layer
+
+QueryComment monitors InnoDB internals from two sources:
+
+**`INFORMATION_SCHEMA.INNODB_METRICS` and `SHOW ENGINE INNODB STATUS`** provide:
+- Buffer pool hit ratio, pages read, pages written, pages flushed
+- Adaptive hash index utilization
+- Purge lag and InnoDB history list length
+- Redo log usage and checkpoint age
+- Row lock waits and lock wait time
+- Deadlock frequency
+
+**`SHOW REPLICA STATUS`** provides replication lag, relay log position, seconds behind source, and replication error state. QueryComment records replica lag as a timeseries and correlates lag events with the write workload patterns on the source.
+
+Metadata lock and table lock wait state is surfaced from `performance_schema` thread and wait instrumentation. When a thread is waiting for a metadata lock, QueryComment identifies the session holding the lock and the DDL or long-running transaction responsible.
+
+### Infrastructure layer
+
+QueryComment collects OS-level infrastructure metrics from the agent host:
+
+- **CPU**: overall utilization and per-core breakdown. MySQL single-threaded operations (like the binlog dump thread and certain sort operations) can saturate a single core while overall CPU appears low — per-core data exposes this.
+- **Memory**: buffer pool allocation vs. OS page cache vs. available memory. Oversized buffer pools starve the OS cache; undersized ones cause unnecessary disk reads.
+- **Disk**: IOPS, throughput, and per-operation latency. Disk latency is correlated with InnoDB buffer pool miss events and checkpoint flushes.
+- **Network**: throughput and packet rates, critical for replication traffic and high-connection environments.
+
+Infrastructure metrics are correlated with database signals automatically. An IOPS spike is annotated with the InnoDB checkpoint activity and any full-scan queries occurring at the same time so you see the cause, not just the symptom.
+
+## Setup for MySQL
+
+<Steps>
+  <Step title="Create a read-only monitoring user">
+    Connect to your MySQL instance as a user with `GRANT` privileges and run:
+
+    ```sql
+    CREATE USER 'querycomment'@'%' IDENTIFIED BY 'your-password';
+    GRANT SELECT, PROCESS, REPLICATION CLIENT ON *.* TO 'querycomment'@'%';
+    FLUSH PRIVILEGES;
+    ```
+
+    - `SELECT` grants read access to `performance_schema`, `INFORMATION_SCHEMA`, and the monitoring views.
+    - `PROCESS` allows the agent to run `SHOW ENGINE INNODB STATUS` and see all threads in `SHOW PROCESSLIST`.
+    - `REPLICATION CLIENT` allows the agent to run `SHOW REPLICA STATUS` (or `SHOW SLAVE STATUS` on MySQL 5.7).
+
+    QueryComment never writes to your database or modifies schema.
+
+    <Note>
+      If you want to restrict the agent to connect only from a specific host, replace `'%'` with the IP address or hostname of the host running the QueryComment agent.
+    </Note>
+  </Step>
+
+  <Step title="Verify performance_schema is enabled">
+    `performance_schema` is enabled by default in MySQL 5.7 and later. Confirm it is active:
+
+    ```sql
+    SHOW VARIABLES LIKE 'performance_schema';
+    ```
+
+    The output should show `performance_schema | ON`. If it shows `OFF`, add the following to your `my.cnf` and restart MySQL:
+
+    ```
+    [mysqld]
+    performance_schema = ON
+    ```
+
+    Also confirm that statement digests are being collected:
+
+    ```sql
+    SELECT * FROM performance_schema.setup_consumers
+    WHERE NAME LIKE '%statements%';
+    ```
+
+    The `events_statements_summary_by_digest` consumer should be enabled. If it is not, enable it:
+
+    ```sql
+    UPDATE performance_schema.setup_consumers
+    SET ENABLED = 'YES'
+    WHERE NAME = 'events_statements_summary_by_digest';
+    ```
+
+    <Warning>
+      On MySQL 5.7, some `performance_schema` instruments are disabled by default for performance reasons. QueryComment's agent setup documentation lists the specific instruments it requires and the commands to enable them without enabling full statement event history.
+    </Warning>
+  </Step>
+
+  <Step title="Deploy the QueryComment agent">
+    Run the agent with your MySQL connection string. The agent connects using the read-only `querycomment` user you created in step 1.
+
+    **Binary:**
+
+    ```bash
+    querycomment-agent \
+      --dsn "querycomment:your-password@tcp(your-host:3306)/performance_schema" \
+      --api-key "your-api-key"
+    ```
+
+    **Container sidecar (Docker):**
+
+    ```bash
+    docker run -d \
+      -e QC_DSN="querycomment:your-password@tcp(your-host:3306)/performance_schema" \
+      -e QC_API_KEY="your-api-key" \
+      querycomment/agent:latest
+    ```
+
+    The agent polls statistics views on a configurable interval (default: 60 seconds). It does not sit in the query path or proxy connections.
+  </Step>
+
+  <Step title="Verify in the dashboard">
+    Open your QueryComment dashboard. Within a few minutes of starting the agent you should see:
+
+    - Query fingerprints populating in the **Queries** tab
+    - InnoDB metrics appearing in the **MySQL Engine** panel
+    - Infrastructure metrics in the **Infrastructure** panel
+
+    If data does not appear within five minutes, check the agent logs for connection errors and verify that the `querycomment` user can connect from the agent host and has the required grants. The [troubleshooting guide](/troubleshooting) covers common connection and permission issues.
+  </Step>
+</Steps>
+
+## Supported MySQL versions and deployments
+
+QueryComment supports MySQL 5.7 and MySQL 8.x. The agent relies on `performance_schema.events_statements_summary_by_digest`, which is available in both versions with statement digest instrumentation enabled.
+
+<CardGroup cols={2}>
+  <Card title="Self-managed MySQL" icon="server">
+    MySQL on EC2, bare metal, or any VM with network access from the agent host. Full access to `my.cnf` lets you tune `performance_schema` instrumentation and InnoDB parameters directly.
+  </Card>
+  <Card title="PlanetScale" icon="database" href="/databases/planetscale">
+    PlanetScale's Vitess-based MySQL requires Vitess-aware monitoring. See the PlanetScale integration guide for branch-aware setup and VTGate monitoring.
+  </Card>
+  <Card title="Amazon RDS MySQL" icon="database" href="/databases/rds-mysql">
+    RDS MySQL exposes `performance_schema` and supports the `querycomment` user grant pattern above. See the RDS MySQL integration guide for parameter group settings.
+  </Card>
+  <Card title="GCP Cloud SQL for MySQL" icon="database" href="/databases/cloud-sql">
+    Cloud SQL for MySQL supports `performance_schema` and read-only monitoring users. See the Cloud SQL integration guide for private IP and Auth Proxy connection options.
+  </Card>
+  <Card title="Vitess" icon="database">
+    Vitess shards MySQL and exposes a subset of the standard MySQL interface. QueryComment tracks query performance through the full Vitess stack.
+  </Card>
+  <Card title="Percona Server for MySQL" icon="database">
+    Percona Server extends MySQL with additional `performance_schema` instrumentation. QueryComment leverages Percona-specific extensions for deeper analysis.
+  </Card>
+</CardGroup>
+
+<Tip>
+  MySQL 8.0 renamed `SHOW SLAVE STATUS` to `SHOW REPLICA STATUS`. The QueryComment agent detects your MySQL version and uses the correct syntax automatically — no configuration required.
+</Tip>

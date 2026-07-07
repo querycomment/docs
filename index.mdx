@@ -1,20 +1,54 @@
 ---
-title: "Introduction"
-description: "Welcome to your project"
+title: "QueryComment: Database Observability That Actually Works"
+sidebarTitle: "Home"
+description: "QueryComment monitors PostgreSQL and MySQL across query, engine, and infrastructure layers to detect degradation and explain root causes automatically."
 ---
 
-Write a short description of your product here. What it does, who it's for, and what they can accomplish with it.
+QueryComment is database observability built for engineering teams who are tired of finding out about slowdowns from users. Instead of static thresholds and single-metric dashboards, QueryComment watches your database across three correlated layers — query behavior, engine internals, and infrastructure — and tells you *why* performance is degrading, not just *that* it is.
 
-<Tip>
-  Ready to make this your own? Start by editing this page. Update your `docs.json` file to customize your site. Then fill out the [Quickstart](/quickstart) page.
-</Tip>
+## Get Started
 
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  This card links to the quickstart page in your project.
-</Card>
-<Card title="Components" icon="puzzle-piece" href="https://mintlify.com/docs/components">
-  Add cards, callouts, steps, tabs, and more to design and structure your pages.
-</Card>
-<Card title="Settings" icon="gear" href="https://mintlify.com/docs/organize/settings">
-  Set your site name, branding, and navigation in the `docs.json` file.
-</Card>
+<CardGroup cols={2}>
+  <Card title="Introduction" icon="book-open" href="/introduction">
+    Learn what QueryComment is, how it works, and why it catches problems that traditional monitoring misses.
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Connect your first PostgreSQL or MySQL database in under five minutes and start detecting regressions automatically.
+  </Card>
+  <Card title="How It Works" icon="gears" href="/how-it-works">
+    Dive into the three-layer architecture, the causal reasoning engine, and drift detection methodology.
+  </Card>
+  <Card title="FAQ" icon="circle-question" href="/faq">
+    Answers to common questions about deployment, security, supported databases, and early access.
+  </Card>
+</CardGroup>
+
+## What Makes QueryComment Different
+
+<CardGroup cols={3}>
+  <Card title="Three-Layer Observability" icon="layer-group">
+    QueryComment correlates query fingerprints, engine internals, and infrastructure signals simultaneously — so a single slow query tells the full story from SQL to disk.
+  </Card>
+  <Card title="Drift Detection" icon="chart-line">
+    Statistical models baseline every query individually and flag regressions before they cross a static threshold. You get days of warning instead of a pager alert at 2 AM.
+  </Card>
+  <Card title="Root Cause Analysis" icon="magnifying-glass-chart">
+    A causal reasoning engine connects anomalies across all three layers into a directed chain — so you see "autovacuum blocked → dead tuple bloat → buffer eviction → disk I/O saturation" as one finding, not four unrelated alerts.
+  </Card>
+</CardGroup>
+
+## How Onboarding Works
+
+You can go from zero to observability in three steps, with no code changes and no query proxying required.
+
+<Steps>
+  <Step title="Connect Your Database">
+    Deploy the QueryComment agent as a sidecar container or standalone binary. Point it at your database and supply your API key. The agent reads from stats views — it never modifies your database.
+  </Step>
+  <Step title="QueryComment Baselines Your Queries">
+    The agent immediately begins fingerprinting queries and building latency baselines using exponential weighted moving models. Within 15 minutes you'll see your first query performance data. Within a day, drift detection has enough history to flag regressions.
+  </Step>
+  <Step title="Get Alerted Before Users Notice">
+    When a query's latency trend deviates from its seasonal baseline, QueryComment fires an alert with a causal explanation attached — not just "p99 latency is high," but the full chain of contributing factors traced across query, engine, and infrastructure layers.
+  </Step>
+</Steps>

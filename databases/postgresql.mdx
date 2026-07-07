@@ -1,0 +1,174 @@
+---
+title: "PostgreSQL Monitoring and Observability with QueryComment"
+sidebarTitle: "PostgreSQL"
+description: "Connect QueryComment to your PostgreSQL database for three-layer observability that correlates query regressions, engine internals, and infrastructure metrics."
+---
+
+QueryComment goes beyond measuring query latency in isolation. When a query slows down, the latency number tells you something went wrong — but Postgres engine internals tell you *why*: a planner switch to a sequential scan after autovacuum fell behind, a lock wait stacking up behind a long-running transaction, or a buffer cache working set that no longer fits in `shared_buffers` after a backfill. QueryComment connects all three layers — query behavior, engine state, and infrastructure signals — so you can move from "something is slow" to "here is exactly what changed and why" without manually joining statistics views or waiting for an alert to fire.
+
+## Why standard APM tools miss Postgres-specific issues
+
+Most APM tools treat the database as a black box. They instrument your application, measure how long each database call takes, and report that 600ms was "database time." That tells you where time went in your application stack. It tells you nothing about what Postgres was actually doing during those 600ms — whether the planner chose a sequential scan because a bloated index made the cost estimate wrong, whether the query was sitting in a lock queue behind an idle-in-transaction connection, or whether the buffer cache was cold after a schema migration backfilled a new column across millions of rows.
+
+Postgres exposes rich diagnostic data through statistics views: `pg_stat_statements` for aggregate query performance, `pg_stat_bgwriter` for checkpoint and background writer activity, `pg_stat_activity` for live session state, `pg_stat_user_tables` for vacuum and dead tuple counts, `pg_locks` for lock contention, and `pg_stat_replication` for replica lag. Each view is useful on its own. None is sufficient in isolation — a dead tuple count only becomes actionable when you correlate it with a query that just switched from an index scan to a sequential scan on that same table. QueryComment reads all of these views continuously, correlates them over time, and surfaces the connection automatically.
+
+## Common PostgreSQL pain points we solve
+
+<AccordionGroup>
+  <Accordion title="Slow queries that creep under the radar">
+    A query running 4ms in week one reaches 18ms six weeks later — a 4.5x regression that never crosses a static alert threshold. Under normal traffic the degradation is tolerable. Under a load spike the same query hits 2 seconds and takes down your API. QueryComment baselines every query fingerprint and alerts on statistically significant drift, not just threshold crossings, so you catch the regression during the six weeks of slow creep — not during the incident.
+  </Accordion>
+
+  <Accordion title="Autovacuum falling behind">
+    Autovacuum is triggered by row-level thresholds that were tuned for a different write volume. Dead tuple counts climb. Eventually index scans start hitting dead tuple pointers and the planner decides a sequential scan is cheaper. Table bloat grows. QueryComment tracks dead tuple ratios, last vacuum timestamps, and autovacuum run durations from `pg_stat_user_tables`, and correlates sudden plan changes with the vacuum state of the table involved so you can identify the root cause before the problem compounds.
+  </Accordion>
+
+  <Accordion title="Index bloat degrading performance silently">
+    An index that should fit in 600MB of data has grown to 4GB. Index pages are sparsely filled, cache efficiency drops, and every index scan does more I/O than necessary. The degradation is gradual and invisible to query-level monitoring alone. QueryComment tracks index size relative to table size, flags indexes where bloat ratio exceeds expected bounds, and correlates bloat growth with query latency trends on the tables those indexes serve.
+  </Accordion>
+
+  <Accordion title="Connection pool saturation">
+    PgBouncer hits its connection limit. New connections queue. Client timeouts fire. Meanwhile Postgres CPU sits at 12% — the database itself has capacity. The bottleneck is not Postgres; it is the pool configuration or a surge in idle-in-transaction sessions holding connections without doing work. QueryComment monitors `pg_stat_activity` for connection state distribution, flags idle-in-transaction sessions by duration and originating query, and surfaces pool saturation as a distinct signal rather than a generic database slowdown.
+  </Accordion>
+
+  <Accordion title="Replication lag spikes during batch writes">
+    A batch job writes a large volume of data. The replica falls behind. Application code reading from the replica returns stale data. The lag recovers after the batch completes, leaving no persistent evidence. QueryComment monitors `pg_stat_replication` and `pg_stat_wal_receiver` continuously, records lag timeseries against write activity, and correlates lag events with the queries and workload patterns that caused them so you can tune your batch jobs or replica configuration before a lag spike causes a data consistency incident.
+  </Accordion>
+
+  <Accordion title="Buffer cache misses after schema changes">
+    A new column is backfilled across a large table. The rows are now wider. The working set that previously fit in `shared_buffers` no longer does. Buffer cache hit rate drops. Queries that were served entirely from memory now hit disk. QueryComment tracks buffer cache hit ratios over time and correlates degradation events with schema changes and DDL operations, giving you a precise timestamp and cause rather than a gradual mystery slowdown.
+  </Accordion>
+</AccordionGroup>
+
+## What QueryComment monitors in PostgreSQL
+
+### Query layer
+
+QueryComment reads `pg_stat_statements` for every normalized query fingerprint in your database. For each fingerprint it tracks execution count, mean and p95 latency, rows returned, rows examined, shared block hits and reads, and temp block usage. It establishes a rolling baseline per fingerprint and detects regressions — including gradual drift — without requiring you to set manual thresholds.
+
+Alongside aggregate statistics, QueryComment reads `pg_stat_activity` continuously to capture the live session state: which queries are currently running, which are idle-in-transaction, how long each session has been in its current state, and what locks each session holds or is waiting for. Long-running transactions and idle-in-transaction sessions are surfaced with the originating query text, the application name, and the client address, so you can identify the source and act immediately.
+
+QueryComment also detects N+1 query patterns by analyzing per-fingerprint execution counts relative to application request volume, flagging cases where a single logical operation is issuing hundreds of near-identical queries.
+
+### Engine layer
+
+QueryComment monitors Postgres engine internals from several sources:
+
+- **Checkpoint and background writer activity** via `pg_stat_bgwriter`: checkpoint frequency, buffers written by checkpointer vs. background writer vs. backends, and the ratio of timed to requested checkpoints. Frequent requested checkpoints indicate that `max_wal_size` or `checkpoint_completion_target` needs attention.
+- **Vacuum health** via `pg_stat_user_tables`: dead tuple counts, live tuple counts, dead tuple ratio, last autovacuum and manual vacuum timestamps, and autovacuum run durations. QueryComment correlates vacuum state with planner behavior changes on the same tables.
+- **Lock contention** via `pg_locks`: lock wait graphs, blocking query identification, lock type distribution, and duration of waits. QueryComment surfaces the blocking query and session alongside the blocked queries so you can see the full contention chain.
+- **Replication** via `pg_stat_replication` and `pg_stat_wal_receiver`: write lag, flush lag, replay lag per replica, WAL sender state, and wal receiver last message time. Lag is recorded as a timeseries and correlated with write workload patterns.
+
+### Infrastructure layer
+
+QueryComment collects OS-level metrics from the host or container running Postgres: CPU utilization (overall and per-core), memory usage (resident set size, available memory, swap), disk IOPS and throughput, disk latency (critical for EBS-backed RDS or GP2 volumes under burst credit exhaustion), and network throughput.
+
+Infrastructure metrics are correlated with database signals automatically. A disk I/O spike is annotated with the checkpoint activity and any full-table scans occurring at the same time. A memory pressure event is correlated with buffer cache hit rate changes. This means you spend less time manually correlating dashboards and more time acting on a complete picture.
+
+## Setup for PostgreSQL
+
+<Steps>
+  <Step title="Create a read-only monitoring user">
+    Connect to your PostgreSQL database as a superuser and run:
+
+    ```sql
+    CREATE USER querycomment WITH PASSWORD 'your-password';
+    GRANT pg_monitor TO querycomment;
+    GRANT SELECT ON ALL TABLES IN SCHEMA pg_catalog TO querycomment;
+    ```
+
+    The `pg_monitor` role (available in PostgreSQL 10+) grants read access to all monitoring views without any write permissions. QueryComment never modifies your database schema or data.
+
+    <Note>
+      On PostgreSQL 9.6, replace `GRANT pg_monitor` with explicit grants on `pg_stat_statements` and the `pg_catalog` views you want to monitor.
+    </Note>
+  </Step>
+
+  <Step title="Ensure pg_stat_statements is enabled">
+    QueryComment requires `pg_stat_statements` for query-level monitoring. Check whether it is already loaded:
+
+    ```sql
+    SHOW shared_preload_libraries;
+    ```
+
+    If `pg_stat_statements` is not listed, add it to your `postgresql.conf`:
+
+    ```
+    shared_preload_libraries = 'pg_stat_statements'
+    ```
+
+    Then restart Postgres and create the extension in the database you want to monitor:
+
+    ```sql
+    CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+    ```
+
+    <Warning>
+      Changing `shared_preload_libraries` requires a full Postgres restart, not just a reload. Plan this during a maintenance window on production instances.
+    </Warning>
+
+    On managed platforms (RDS, Aurora, Cloud SQL), `pg_stat_statements` is available as a parameter group setting. See the platform-specific guide for your provider.
+  </Step>
+
+  <Step title="Deploy the QueryComment agent">
+    Run the agent with your Postgres connection string. The agent connects using the read-only `querycomment` user you created in step 1.
+
+    **Binary:**
+
+    ```bash
+    querycomment-agent \
+      --dsn "postgres://querycomment:your-password@your-host:5432/your-database" \
+      --api-key "your-api-key"
+    ```
+
+    **Container sidecar (Docker):**
+
+    ```bash
+    docker run -d \
+      -e QC_DSN="postgres://querycomment:your-password@your-host:5432/your-database" \
+      -e QC_API_KEY="your-api-key" \
+      querycomment/agent:latest
+    ```
+
+    The agent collects statistics on a configurable interval (default: 60 seconds) and streams them to the QueryComment platform. It does not proxy queries or sit in the request path.
+  </Step>
+
+  <Step title="Verify in the dashboard">
+    Open your QueryComment dashboard. Within a few minutes of starting the agent you should see:
+
+    - Query fingerprints populating in the **Queries** tab
+    - Engine metrics appearing in the **PostgreSQL Engine** panel
+    - Infrastructure metrics in the **Infrastructure** panel
+
+    If data does not appear within five minutes, check the agent logs for connection errors and confirm that the `querycomment` user can connect from the agent host. The [troubleshooting guide](/troubleshooting) covers the most common connection and permission issues.
+  </Step>
+</Steps>
+
+## Supported PostgreSQL deployments
+
+QueryComment supports PostgreSQL 10 and later. You can connect any deployment where the `querycomment` user can reach the Postgres port:
+
+<CardGroup cols={2}>
+  <Card title="Self-managed PostgreSQL" icon="server">
+    PostgreSQL running on EC2, bare metal, or any VM. Full access to `postgresql.conf` means you can tune `pg_stat_statements` parameters and autovacuum settings directly.
+  </Card>
+  <Card title="Supabase" icon="database" href="/databases/supabase">
+    Supabase exposes `pg_stat_statements` and the monitoring views. See the Supabase integration guide for connection string format and pooler considerations.
+  </Card>
+  <Card title="Neon" icon="database" href="/databases/neon">
+    Neon's serverless PostgreSQL supports `pg_stat_statements`. See the Neon integration guide for branch-aware monitoring setup.
+  </Card>
+  <Card title="Amazon Aurora PostgreSQL" icon="database" href="/databases/aurora">
+    Aurora exposes most Postgres statistics views. See the Aurora integration guide for parameter group configuration and reader endpoint monitoring.
+  </Card>
+  <Card title="Render" icon="database">
+    Render managed PostgreSQL supports read-only monitoring users and `pg_stat_statements`.
+  </Card>
+  <Card title="Railway" icon="database">
+    Railway PostgreSQL supports `pg_stat_statements` and monitoring user creation.
+  </Card>
+</CardGroup>
+
+<Tip>
+  If you run Postgres on Amazon RDS (non-Aurora), the same read-only user setup applies. Use your RDS endpoint as the host in your connection string.
+</Tip>

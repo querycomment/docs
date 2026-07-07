@@ -1,0 +1,66 @@
+---
+title: "QueryComment: Database Observability for PostgreSQL & MySQL"
+sidebarTitle: "Introduction"
+description: "QueryComment detects database degradation before users notice, using three-layer correlation across queries, engine internals, and infrastructure metrics."
+---
+
+QueryComment is a database observability platform designed for engineering teams running PostgreSQL or MySQL in production. It watches your database across three correlated layers — query behavior, engine internals, and infrastructure — and uses a causal reasoning engine to explain *why* performance problems occur, not just notify you that they did. Whether you're on a managed cloud database or self-hosted Postgres, QueryComment gives you the signal you need to catch regressions before your users do.
+
+## The Problem With Traditional Database Monitoring
+
+Most monitoring tools treat your database as a single metric emitter. You set a threshold — say, p99 latency above 500 ms — and you get an alert when it crosses the line. This approach has three fundamental problems.
+
+**Static thresholds fire too late.** By the time latency crosses your threshold, users are already experiencing slowness. The degradation started minutes or hours earlier as a quiet trend, not a sudden spike.
+
+**Single-layer monitoring hides the cause.** A slow query alert tells you *that* something is wrong, but not *why*. Is it a missing index? A bloated table that autovacuum hasn't cleaned up? An EBS volume that exhausted its burst credits? Without correlating query behavior with engine internals and infrastructure, you're left guessing.
+
+**Teams find out from users, not tools.** The most common way engineers learn about a database problem is a support ticket or a Slack message. That's not observability — that's post-mortem archaeology.
+
+## How QueryComment Is Different
+
+QueryComment takes a three-layer approach to observability and stitches the layers together with a causal reasoning engine.
+
+Instead of static thresholds, QueryComment builds a statistical baseline for every individual query fingerprint and detects when its latency *trend* is drifting — giving you days of advance warning rather than a last-second alert. Baselines are seasonality-aware, so Monday-morning traffic spikes don't trigger false positives.
+
+Instead of isolated metric dashboards, QueryComment builds a directed causal graph across all three layers. When a regression occurs, it surfaces a single finding that traces the full chain — for example: a query's p95 latency drifted upward, correlated with rising dead tuple counts caused by an autovacuum blocked by a long-running transaction, which in turn caused buffer cache eviction and disk I/O saturation. That's one actionable finding, not four unrelated alerts.
+
+## What QueryComment Monitors
+
+<CardGroup cols={2}>
+  <Card title="Query Performance" icon="database">
+    Query fingerprinting, latency percentiles (p50/p95/p99), execution counts, rows examined vs. rows returned ratios, buffer hit rates, sequential scan detection, and N+1 pattern identification — all at sub-minute granularity.
+  </Card>
+  <Card title="Engine Internals" icon="gear">
+    For PostgreSQL: autovacuum activity, buffer pool utilization, lock contention, WAL generation rate, and replication state. For MySQL: InnoDB buffer pool, adaptive hash index efficiency, redo log utilization, purge lag, and row lock waits.
+  </Card>
+  <Card title="Infrastructure Metrics" icon="server">
+    CPU utilization and run queue depth, memory pressure, disk I/O throughput and latency, and network metrics. Cloud-specific signals include AWS EBS burst credit exhaustion, CPU steal time, GCP persistent disk IOPS budgets, and live migration events.
+  </Card>
+  <Card title="Cross-Layer Correlation" icon="diagram-project">
+    The causal reasoning engine links anomalies across all three layers into a directed graph. Statistical methods distinguish genuine causal relationships from coincidental correlations so you get findings, not noise.
+  </Card>
+</CardGroup>
+
+## Supported Databases
+
+QueryComment supports the following databases and managed platforms:
+
+**Open-source engines**
+- PostgreSQL
+- MySQL
+
+**Managed platforms**
+- Supabase
+- Neon
+- Amazon Aurora
+- AWS RDS MySQL
+- PlanetScale
+- Google Cloud SQL
+
+## How It Works in One Sentence
+
+Deploy the QueryComment agent alongside your database — it reads from `pg_stat_statements` or `performance_schema`, builds a statistical baseline for every query fingerprint, and alerts you with a root-cause explanation the moment a latency trend starts to drift.
+
+<Card title="Ready to connect your first database?" icon="rocket" href="/quickstart">
+  Follow the Quickstart guide to get up and running in under five minutes.
+</Card>

@@ -1,0 +1,74 @@
+---
+title: "Database Observability for High-Traffic E-Commerce"
+sidebarTitle: "E-Commerce"
+description: "QueryComment helps e-commerce teams detect catalog degradation, inventory write contention, and session table bloat before peak traffic events break their database."
+---
+
+Every product page load is a database query. Every add-to-cart is a write. Every checkout is a transaction. Unlike many application tiers, your database doesn't have an edge cache to hide behind — when it slows down, your customers feel it directly, and slower pages mean lower conversion rates. QueryComment gives e-commerce engineering teams the visibility to detect database degradation before it reaches customers, and the causal reasoning to fix it fast when it does.
+
+## Your database is your storefront
+
+E-commerce workloads are uniquely punishing because they combine high read volume, high write contention, and extreme traffic variance. At 500 requests per second on a normal Tuesday, your database handles the load comfortably. On Black Friday at 5,000 requests per second, every latency regression you've been ignoring compounds under contention. A query that drifted from 5ms to 12ms over the past two weeks — still well within your alert thresholds — becomes 120ms under peak load because every millisecond of lock wait time is multiplied by the queue of requests waiting behind it.
+
+The teams that survive peak traffic events aren't the ones who respond fastest to incidents. They're the ones who identified and fixed the slow-burning regressions in the two weeks before the event. That requires a different kind of observability — one that surfaces trend signals, not just threshold breaches.
+
+<Info>
+  The gap between your normal traffic baseline and your peak traffic load is where your database's hidden problems live. QueryComment's drift detection is designed specifically to find regressions that stay below alert thresholds at normal load but become catastrophic at 10x traffic.
+</Info>
+
+## Peak traffic failure modes
+
+### Cart session table bloat
+
+High-traffic events create millions of short-lived cart sessions. Your cleanup job runs every hour. Autovacuum runs on its schedule. At normal traffic volumes, dead tuple accumulation is manageable — autovacuum keeps up, the table stays lean, sequential scans are rare.
+
+During a major sale event, session creation volume overwhelms your cleanup cadence. Dead tuples accumulate faster than vacuum can remove them. The table bloats. Queries that used to use an index path start hitting sequential scans because the planner's cost estimate for the bloated table has shifted. Your add-to-cart operation goes from 8ms to 800ms. Customers see spinning wheels and abandon their carts.
+
+QueryComment monitors autovacuum activity, dead tuple accumulation rate, and table bloat trends as first-class signals — not afterthoughts. When autovacuum starts falling behind on your session table, you see it days before the bloat becomes severe enough to affect query plans. You have time to tune autovacuum settings, schedule a manual vacuum, or adjust your cleanup job cadence before the event starts.
+
+### Inventory write contention
+
+Flash sales create a specific failure pattern: a thousand users simultaneously trying to buy the last fifty units of a popular item. Every purchase attempt needs to lock the inventory row to check quantity and decrement it. Row-level lock contention on the inventory table builds. Transactions queue behind each other. Connection pool slots fill up. Queries that have nothing to do with the flash sale — product page loads, search requests — start timing out because the pool is exhausted.
+
+<Warning>
+  Inventory write contention cascades in ways that look unrelated at first. Your product listing queries start timing out, and your first instinct is to look at the catalog or search infrastructure — but the actual cause is lock contention on the inventory table consuming all available connection pool slots. Without correlated visibility, this takes 20-30 minutes to diagnose during an active incident.
+</Warning>
+
+QueryComment correlates lock wait spikes with connection pool saturation and identifies the specific table and query at the root of the cascade. Instead of diagnosing the cascade after your pool is exhausted, you see the lock contention building in real time — which table is hot, which query is holding locks, and how the connection pool is responding. You can intervene before the cascade completes.
+
+### Catalog search degradation
+
+Your product catalog queries are among the most complex in your system — full-text search, faceted filtering, price range queries, joins with inventory availability and pricing rules. These queries are expensive by nature, and they're sensitive to data distribution changes.
+
+A large product import doubles your catalog size overnight. The query planner recalculates costs for every catalog query and shifts some of them to different execution plans. A query that was using a composite index switches to a sequential scan because the index selectivity changed. Latency on your product listing page goes from 45ms to 400ms. This happens silently — no deployment, no code change, just a data import that changed the shape of your data.
+
+QueryComment tracks query execution plans continuously, not just at deployment events. When a plan changes — regardless of what triggered it — the change is flagged, attributed to the most likely cause (in this case, the data import that changed table statistics), and correlated with the latency shift that follows. You see the regression within minutes, not after customer complaints start coming in.
+
+## Detecting degradation before peak
+
+The pre-peak window — the two weeks before a major sale event — is when the most valuable work happens. Not incident response, not post-mortems, but proactive detection of the regressions that will compound under load.
+
+QueryComment surfaces degradation trends that stay invisible in threshold-based alerting. A product listing query that drifted from 5ms to 12ms over two weeks is still well inside any reasonable alert threshold. But at 10x traffic with connection pool contention, that query runs at 120ms. Product pages start timing out. Customers abandon their carts.
+
+The signals that predict this outcome are visible weeks in advance: the latency drift trend, the buffer pool hit ratio declining as your catalog grows and hot pages start getting evicted, the connection pool utilization creeping upward during normal traffic peaks, the replication lag that builds slightly during your nightly batch jobs. QueryComment tracks all of these together, in context, and flags the combination as a risk — not as five separate signals that each individually look acceptable.
+
+<CardGroup cols={2}>
+  <Card title="Drift Detection" icon="chart-line">
+    Catch query latency trends before they cross alert thresholds. A query drifting from 5ms to 12ms over two weeks is a signal worth investigating — QueryComment surfaces it automatically.
+  </Card>
+  <Card title="Causal Chains" icon="link">
+    When inventory contention cascades into connection pool exhaustion, QueryComment shows the full chain: which table, which query, which pool, which downstream queries were affected.
+  </Card>
+  <Card title="Infrastructure Correlation" icon="server">
+    Buffer pool hit ratios, autovacuum activity, and replication lag are tracked alongside query performance — not in separate dashboards you have to correlate manually.
+  </Card>
+  <Card title="Pre-Event Window" icon="calendar">
+    The most valuable time to fix a database problem is before your peak traffic event, not during it. QueryComment gives you the signal early enough to act.
+  </Card>
+</CardGroup>
+
+One alert. One causal chain. One fix in the week before your peak event. That's the difference between a record-breaking sales day and an incident post-mortem about why your checkout flow broke under load. Your database is your storefront — QueryComment makes sure it's ready when your customers show up.
+
+<Tip>
+  Teams that use QueryComment's drift detection as part of their pre-event checklist consistently reduce peak-traffic incidents. The goal isn't to have the fastest incident response — it's to have nothing to respond to.
+</Tip>

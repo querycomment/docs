@@ -1,0 +1,116 @@
+---
+title: "Monitor Your Supabase Database with QueryComment"
+sidebarTitle: "Supabase"
+description: "Deep PostgreSQL observability for Supabase — track RLS policy overhead, PgBouncer connection pooling, realtime subscriptions, and Edge Function query patterns."
+---
+
+QueryComment gives your Supabase project the database observability layer that Supabase's built-in dashboard doesn't provide. By connecting directly to the underlying PostgreSQL instance, QueryComment surfaces RLS policy costs, Edge Function N+1 patterns, realtime subscription load, and PostgREST query regressions — everything you need to keep production running fast as your application scales.
+
+## Why Supabase Teams Need Deeper Observability
+
+The Supabase dashboard covers the basics well: connection counts, a query editor, and a surface-level view of slow queries. For a project with a few dozen users, that's enough. For production workloads with row-level security policies across multiple roles, Edge Functions firing hundreds of requests per minute, and realtime subscriptions holding open connections, basic stats stop being useful long before the incident starts.
+
+Common scenarios where the Supabase dashboard leaves you guessing:
+
+- CPU climbs steadily but no individual query looks slow in the query editor
+- A new RLS policy ships and p99 latency doubles — but the query itself hasn't changed
+- Edge Functions trigger cascading N+1 queries that only become visible at scale
+- A PostgREST client-side filter change silently disables an index
+
+QueryComment answers these questions by reading from `pg_stat_statements`, `pg_stat_activity`, and `pg_stat_user_tables` directly, correlating them over time, and surfacing the specific cause rather than just the symptom.
+
+## Supabase-Specific Monitoring Capabilities
+
+<CardGroup cols={2}>
+  <Card title="RLS Policy Overhead Tracking" icon="shield-halved">
+    QueryComment tracks execution cost per row-level security policy, not just per query. When a policy causes a sequential scan or degrades an index, you see exactly which policy on which table is responsible.
+  </Card>
+  <Card title="Edge Function N+1 Detection" icon="bolt">
+    Serverless Edge Functions often trigger batches of near-identical queries in rapid succession. QueryComment detects these N+1 patterns and links them back to the calling function so you can fix them at the source.
+  </Card>
+  <Card title="Realtime Subscription Load" icon="satellite-dish">
+    Realtime subscriptions hold persistent connections and read from the WAL continuously. QueryComment monitors the connection load and WAL consumption these subscriptions generate, so you can right-size your plan before hitting limits.
+  </Card>
+  <Card title="PostgREST Query Baselining" icon="chart-line">
+    PostgREST translates REST calls into SQL automatically. When a schema change or a client-side query builder update silently changes the generated SQL, QueryComment compares it against the established baseline and flags the regression.
+  </Card>
+</CardGroup>
+
+## How QueryComment Integrates with Supabase
+
+Supabase uses PgBouncer as a connection pooler in front of PostgreSQL. QueryComment connects to the **direct connection string** — bypassing PgBouncer — so it can read from statistics views that aren't available through a pooled session. PgBouncer itself is monitored separately, giving you the full picture: application connection pooling health and raw database performance in one place.
+
+<Info>
+QueryComment installs a lightweight read-only extension that taps `pg_stat_statements`, `pg_stat_activity`, and `pg_stat_user_tables`. No data leaves your database — QueryComment collects query metrics and execution statistics, never row data.
+</Info>
+
+The agent runs as a read-only role with no ability to modify your schema, data, or configuration. It does not proxy queries or sit in the request path, so there is zero latency overhead on your application.
+
+## Setup
+
+<Steps>
+  <Step title="Get Your Direct Connection String">
+    In the Supabase dashboard, navigate to **Settings → Database → Connection string**, then select **URI** from the format dropdown. Copy the **direct connection** string — this is the one that connects to port `5432` directly, not the pooled string on port `6543`.
+
+    ```
+    postgresql://postgres:[YOUR-PASSWORD]@db.[PROJECT-REF].supabase.co:5432/postgres
+    ```
+
+    <Warning>
+      Do not use the PgBouncer (pooled) connection string for QueryComment. The pooled string on port `6543` restricts session-level statistics views that QueryComment needs to function correctly.
+    </Warning>
+  </Step>
+
+  <Step title="Create a Read-Only Monitoring Role">
+    Run the following in the Supabase SQL editor to create a dedicated monitoring user. Using a dedicated role makes it easy to audit and revoke access independently.
+
+    ```sql
+    -- Create the monitoring role
+    CREATE ROLE querycomment_monitor WITH LOGIN PASSWORD 'choose-a-strong-password';
+
+    -- Grant read access to statistics views
+    GRANT pg_monitor TO querycomment_monitor;
+    GRANT EXECUTE ON FUNCTION pg_stat_statements_reset() TO querycomment_monitor;
+
+    -- Allow reading table statistics
+    GRANT SELECT ON ALL TABLES IN SCHEMA pg_catalog TO querycomment_monitor;
+    ```
+  </Step>
+
+  <Step title="Deploy the QueryComment Agent">
+    Paste your direct connection string into the QueryComment onboarding flow, or pass it to the agent directly if you're deploying via Docker:
+
+    ```bash
+    docker run --rm \
+      -e QC_DATABASE_URL="postgresql://querycomment_monitor:password@db.[PROJECT-REF].supabase.co:5432/postgres" \
+      querycomment/agent:latest
+    ```
+
+    The agent connects, reads from the statistics views, and begins sending metrics to the QueryComment platform. No restarts or application changes are required.
+  </Step>
+
+  <Step title="Verify in the QueryComment Dashboard">
+    Open the QueryComment dashboard and navigate to your Supabase project. Within a few minutes you should see:
+
+    - Query performance timelines populating
+    - Connection pool stats (both direct and PgBouncer)
+    - RLS policy overhead visible on the **Policies** tab
+    - Any active realtime subscriptions listed under **Connections**
+
+    <Tip>
+      Run a representative workload against your database immediately after setup. QueryComment establishes its performance baselines from the first data it receives, so real traffic produces more accurate regression detection than idle state.
+    </Tip>
+  </Step>
+</Steps>
+
+## From Metrics to Root Cause
+
+Here is what a typical investigation looks like with QueryComment connected to Supabase.
+
+**Scenario:** Your application's p99 response time increases 3× after a routine deploy. CPU on the Supabase dashboard is elevated but no query looks significantly slower on its own.
+
+**With QueryComment:** The RLS policy overhead view shows that the `orders` table policy — `auth.uid() = user_id` — jumped from near-zero cost to accounting for 40% of total query time. Drilling in, you can see the policy was previously satisfied by a partial index on `user_id WHERE status = 'active'`. The table grew past the point where that partial index is selective enough, so PostgreSQL switched to a sequential scan. The fix is a new index; QueryComment surfaces the exact policy, table, and access pattern so you're not guessing.
+
+<Note>
+This kind of correlation — connecting an RLS policy change in cost to a specific table growth milestone and index selectivity threshold — is not visible in `pg_stat_statements` alone. QueryComment maintains history and correlates across multiple statistics sources to surface it automatically.
+</Note>

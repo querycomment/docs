@@ -1,0 +1,117 @@
+---
+title: "AWS RDS MySQL Observability Beyond Performance Insights"
+sidebarTitle: "RDS MySQL"
+description: "Deep performance_schema integration for RDS MySQL — execution plan history, InnoDB internals, lock wait tracking, and RDS-specific failure mode correlation."
+---
+
+AWS RDS MySQL gives you Enhanced Monitoring for OS-level metrics and Performance Insights for top SQL by wait events. These tools tell you that CPU spiked and which query was running at the time. They don't tell you why that query started doing a full table scan when it was using an index yesterday, why InnoDB lock waits increased after a parameter group change, or whether your instance is the right size for your actual workload. QueryComment fills that gap with deep `performance_schema` integration, per-query execution plan history, and correlation with RDS-specific infrastructure events.
+
+## What RDS MySQL Monitoring Misses
+
+Enhanced Monitoring and Performance Insights are useful, but they leave a significant visibility gap:
+
+**Enhanced Monitoring** gives you OS-level metrics — CPU, memory, disk I/O, network — at up to 1-second granularity. It tells you the system was under stress. It doesn't tell you which query caused it or why.
+
+**Performance Insights** shows you the top SQL statements by average active sessions and wait event breakdown. It tells you which query was the top contributor to wait time. It doesn't show you how that query's execution plan has changed over time, or what InnoDB was doing internally when the wait occurred.
+
+The gap between these two layers is where most RDS MySQL incidents live. A query regresses because the optimizer chose a different plan after table statistics became stale. A maintenance window applies a parameter group change that alters optimizer behavior. Storage autoscaling triggers an I/O spike that causes `innodb_buffer_pool_reads` to jump. None of these root causes are visible from the tools AWS provides.
+
+## Deep performance_schema Integration
+
+QueryComment reads from `performance_schema` far beyond the summary tables that Performance Insights uses. This includes:
+
+- **`events_statements_history_long`:** per-execution statement data including full execution plan, rows examined, rows sent, temporary tables created, and sort operations
+- **`events_waits_summary_by_thread_by_event_name`:** wait event breakdown at the individual thread level, not just averaged across all sessions
+- **`table_io_waits_summary_by_index_usage`:** per-index I/O wait data that shows exactly which indexes are being used, which are unused, and which table scans are happening because no usable index exists
+- **`mutex_instances` and `rwlock_instances`:** mutex and read-write lock contention at the engine level
+
+From this data, QueryComment constructs a per-query execution profile over time. When a query's plan changes — new index chosen, index dropped, full table scan introduced — QueryComment marks the change on the timeline and preserves the before/after plan so you can compare them directly.
+
+**InnoDB buffer pool metrics** tracked per query workload bucket:
+
+- Buffer pool hit ratio (reads from cache vs. reads from disk)
+- Dirty page ratio and checkpoint pressure
+- Adaptive hash index hit rate and efficiency
+- Page eviction rate correlated with working set size
+
+<Tip>
+  If your buffer pool hit ratio drops after a workload change, QueryComment can identify which query classes are introducing the most cache pressure — guiding you toward better indexing or query rewriting rather than a reflexive instance upsize.
+</Tip>
+
+**Lock wait tracking** connects individual lock waits to the queries holding and waiting for locks. When a slow `UPDATE` or `DELETE` causes cascading lock waits across your workload, QueryComment shows you the blocker query, the waiting queries, and the duration — not just the aggregate wait time that Performance Insights reports.
+
+## RDS-Specific Failure Modes
+
+RDS MySQL introduces infrastructure behaviors that affect query performance in ways that look like query regressions but aren't.
+
+**Storage autoscaling I/O latency:** When RDS storage autoscales (your allocated storage expands automatically), the storage subsystem performs background I/O during the expansion. This can cause `innodb_data_read` and `innodb_data_written` to spike along with elevated read latency. QueryComment detects storage autoscaling events from RDS API signals and marks them on the query latency timeline, so you know whether a latency spike is your query or your storage expanding.
+
+**Parameter group changes during maintenance windows:** RDS applies parameter group changes during scheduled maintenance windows. Some parameters — `optimizer_switch` flags, `join_buffer_size`, `sort_buffer_size`, `innodb_buffer_pool_size` — directly affect query execution. QueryComment tracks parameter group changes and correlates them with shifts in query performance, highlighting which queries' behavior changed after the maintenance window.
+
+**Multi-AZ failovers:** When RDS promotes the standby to primary, connections to the old primary drop and applications must reconnect. The new primary starts with a cold InnoDB buffer pool. QueryComment marks failover events and tracks the buffer pool warmup curve after the failover, so the expected latency increase during warmup isn't confused with a regression.
+
+<Warning>
+  Multi-AZ failovers typically cause 20–60 seconds of elevated latency on RDS MySQL as the buffer pool warms. QueryComment baselines your normal warmup curve so it can distinguish expected post-failover behavior from genuine performance problems.
+</Warning>
+
+## Right-Sizing and Cost Optimization
+
+QueryComment correlates your query workload characteristics with instance resource utilization to tell you whether your RDS instance is correctly provisioned.
+
+**Over-provisioned:** If your peak workload leaves substantial CPU and memory headroom and your buffer pool hit ratio is consistently high, you may be paying for capacity you don't use. QueryComment's utilization report shows you peak utilization across a rolling 30-day window to make this assessment defensible.
+
+**Under-provisioned:** If your buffer pool hit ratio is low (frequently reading from disk), if your CPU regularly saturates during business hours, or if your storage IOPS are consistently at the provisioned limit, you're leaving performance on the table. QueryComment shows you which metrics are constraining performance so you can make a targeted change rather than blindly doubling instance size.
+
+**Mis-provisioned:** Sometimes the right fix isn't more compute — it's a different instance type. High memory pressure with moderate CPU might point to an instance type with a better memory-to-CPU ratio. QueryComment surfaces these patterns alongside concrete query-level recommendations (indexing, query rewriting) so you can see which problems infrastructure solves and which ones code solves.
+
+## Setup
+
+<Steps>
+  <Step title="Enable performance_schema">
+    Confirm that `performance_schema` is enabled on your RDS instance. It is enabled by default on RDS MySQL 5.7 and 8.0, but verify:
+
+    ```sql
+    SHOW VARIABLES LIKE 'performance_schema';
+    -- Should return: performance_schema | ON
+    ```
+
+    If it's off, enable it by modifying the parameter group. Note that enabling `performance_schema` requires an instance reboot.
+
+    <Info>
+      QueryComment also benefits from `performance_schema_events_statements_history_size` being set to at least `100` (default is `10`). Increase this in your parameter group to improve per-query history depth.
+    </Info>
+  </Step>
+
+  <Step title="Create a Monitoring User">
+    ```sql
+    CREATE USER 'querycomment_monitor'@'%' IDENTIFIED BY 'choose-a-strong-password';
+
+    -- Core monitoring grants
+    GRANT SELECT, PROCESS, REPLICATION CLIENT ON *.* TO 'querycomment_monitor'@'%';
+
+    -- performance_schema access
+    GRANT SELECT ON performance_schema.* TO 'querycomment_monitor'@'%';
+
+    -- information_schema access
+    GRANT SELECT ON information_schema.* TO 'querycomment_monitor'@'%';
+    ```
+  </Step>
+
+  <Step title="Configure Security Group Access">
+    Add an inbound rule to your RDS security group allowing TCP traffic on port `3306` from the IP address or security group of the host running the QueryComment agent.
+  </Step>
+
+  <Step title="Deploy the Agent">
+    ```bash
+    docker run --rm \
+      -e QC_DATABASE_URL="mysql://querycomment_monitor:password@[your-rds-endpoint].rds.amazonaws.com:3306/[dbname]" \
+      querycomment/agent:latest
+    ```
+
+    The agent connects and begins collecting from `performance_schema` immediately. Baseline data accumulates over the first 24 hours; regression detection becomes fully active once a baseline exists.
+  </Step>
+
+  <Step title="Verify Execution Plan Collection">
+    In the QueryComment dashboard, navigate to **Query Explorer** and select any query that has run since the agent connected. Confirm that the **Execution Plan** tab shows a captured plan. If plans aren't appearing, verify that `performance_schema_events_statements_history_long_size` is greater than zero on your instance.
+  </Step>
+</Steps>

@@ -1,0 +1,83 @@
+{
+  "projectType": "saas",
+  "projectName": "QueryComment",
+  "projectDescription": "QueryComment is a database observability platform that correlates query performance, engine internals, and infrastructure metrics across three layers to detect and explain database degradation before it impacts users.",
+  "theme": "luma",
+  "primaryColor": "#848c8e",
+  "lightColor": "#11161e",
+  "darkColor": "#cfd0d2",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "how-it-works"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/three-layer-observability",
+              "concepts/drift-detection",
+              "concepts/cross-layer-correlation",
+              "concepts/query-fingerprinting"
+            ]
+          },
+          {
+            "group": "Database Support",
+            "pages": [
+              "databases/postgresql",
+              "databases/mysql",
+              "databases/supabase",
+              "databases/neon",
+              "databases/aurora",
+              "databases/planetscale",
+              "databases/rds-mysql",
+              "databases/cloud-sql"
+            ]
+          },
+          {
+            "group": "Use Cases",
+            "pages": [
+              "use-cases/saas",
+              "use-cases/fintech",
+              "use-cases/ecommerce"
+            ]
+          },
+          {
+            "group": "Help",
+            "pages": [
+              "faq",
+              "troubleshooting"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Three-layer database observability: query performance, engine internals, and infrastructure metrics",
+    "Cross-layer causal correlation that explains why a query got slow, not just that it did",
+    "Drift detection using statistical trend analysis to catch silent degradation before thresholds are breached",
+    "Query fingerprinting with per-fingerprint latency percentile baselines (p50, p95, p99)",
+    "PostgreSQL and MySQL support across self-managed and managed platforms (Supabase, Neon, Aurora, PlanetScale, RDS, Cloud SQL)",
+    "No code changes or query proxying required — agent reads existing database statistics views",
+    "Autovacuum lag detection, bloat monitoring, and lock contention analysis for PostgreSQL",
+    "InnoDB buffer pool, replication health, and metadata lock monitoring for MySQL",
+    "Cloud-specific infrastructure signals (EBS burst credits, GCP persistent disk limits, live migration events)"
+  ],
+  "publicApiSurface": [
+    "Agent binary / sidecar container deployment",
+    "Read-only database connection setup (pg_stat_statements, performance_schema)",
+    "Early access signup / Calendly onboarding flow",
+    "Dashboard with query regression alerts and causal chain explanations",
+    "Drift detection alerts (statistical trend deviations)",
+    "Query plan change detection",
+    "Cross-layer incident timeline view"
+  ]
+}

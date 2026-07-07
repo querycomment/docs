@@ -1,0 +1,93 @@
+---
+title: "Three-Layer Database Observability Explained"
+sidebarTitle: "Three Layers"
+description: "QueryComment monitors query performance, database engine internals, and infrastructure metrics simultaneously to detect problems across all three levels of your database stack."
+---
+
+Most database monitoring tools watch one thing: query latency, or CPU usage, or replication lag. That single-layer view tells you *that* something is wrong, but rarely *why*. A slow query could be caused by a missing index, a bloated table blocking autovacuum, an exhausted EBS burst credit balance, or a long-running transaction holding a lock — and each of those root causes lives at a different layer of your stack. QueryComment monitors all three layers simultaneously and connects signals across them, so you get the full picture instead of a dashboard full of unrelated gauges.
+
+## The three layers
+
+<CardGroup cols={3}>
+  <Card title="Query Layer" icon="magnifying-glass-chart">
+    Tracks every query fingerprint, latency percentiles, execution counts, and cache hit rates. This is where symptoms appear first.
+  </Card>
+  <Card title="Engine Layer" icon="gear">
+    Monitors database internals: autovacuum, buffer pools, lock contention, WAL generation, and replication state. This is where root causes live.
+  </Card>
+  <Card title="Infrastructure Layer" icon="server">
+    Watches CPU, memory, disk I/O, and network. Surfaces cloud-specific failure modes like EBS burst credit exhaustion and GCP live migration events.
+  </Card>
+</CardGroup>
+
+## Layer 1 — Query Performance
+
+The query layer is your primary symptom surface. When something degrades in your database, latency percentiles and execution counts are typically the first human-visible signal. QueryComment collects the following per query fingerprint:
+
+- **Latency percentiles** — p50, p95, and p99 execution times, tracked at sub-minute granularity so short-lived regressions are not averaged away.
+- **Execution counts** — total calls per measurement window, useful for distinguishing a query that got slower from a query that started running more often.
+- **Rows examined vs. rows returned** — a rising ratio indicates the query is scanning more data to produce the same result, often a sign of index degradation or table bloat.
+- **Buffer hit rates** — the fraction of data pages served from the buffer cache rather than disk. A declining hit rate signals cache eviction pressure or table growth outpacing cache capacity.
+- **Temporary table usage** — queries that spill to disk via temporary tables show up here, often revealing missing indexes or sort operations on large result sets.
+
+**Data sources:** QueryComment reads `pg_stat_statements` on PostgreSQL and `performance_schema.events_statements_summary_by_digest` on MySQL. No query-level instrumentation agents or application-side changes are required.
+
+**Why this layer matters:** Every user-visible slowdown starts here. Tracking per-fingerprint baselines lets QueryComment distinguish a query that has genuinely regressed from normal query-to-query variance, and gives the causal reasoning engine a concrete starting point for root-cause analysis.
+
+## Layer 2 — Engine Internals
+
+Engine internals explain *why* queries behave differently over time. Two queries with identical execution plans can produce very different latencies depending on the internal state of the database engine. QueryComment monitors engine-level metrics separately for each supported database.
+
+### PostgreSQL engine metrics
+
+- **Autovacuum activity and lag** — tracks which tables autovacuum has processed and how long ago, catching dead tuple accumulation before it causes table bloat and plan degradation.
+- **Buffer pool utilization and hit ratios** — monitors `pg_statio_user_tables` and `pg_buffercache` to track how effectively shared buffers are being used on a per-table basis.
+- **Lock contention and wait events** — surfaces queries waiting on locks and identifies the blocking sessions, including idle transactions that are holding locks without doing useful work.
+- **WAL generation rates** — high write-ahead log volume is an early indicator of write amplification, batch job interference, or unexpected index maintenance activity.
+- **Replication state and lag** — tracks both streaming replication lag (in bytes and seconds) and logical replication slot positions to prevent WAL retention growing unbounded.
+- **Transaction age** — long-running transactions block autovacuum's ability to reclaim dead tuples and can trigger transaction ID wraparound if left unchecked.
+
+### MySQL engine metrics
+
+- **InnoDB buffer pool** — tracks buffer pool hit ratio, page reads, and eviction rates to detect cache pressure before it affects query latency.
+- **Adaptive hash index hit rates** — monitors whether the AHI is providing a benefit for your workload or consuming buffer pool memory without payback.
+- **Redo log utilization** — measures how much of the redo log is in use; sustained high utilization increases checkpoint pressure and can stall writes.
+- **Purge lag** — tracks the InnoDB purge thread's ability to clean up undo records from committed transactions; falling behind here causes table bloat and longer row version chains.
+- **Row lock waits** — identifies lock contention at the row level, including which queries are waiting and which sessions hold the conflicting locks.
+- **Replication thread status** — monitors I/O and SQL thread state, seconds behind source, and relay log position to catch replication drift early.
+
+**Why this layer matters:** Engine state determines how the database executes a query, not just what the query asks for. A query that ran in 8ms last week may take 28ms today because a table it touches has accumulated millions of dead tuples. That change is invisible at the query layer alone.
+
+## Layer 3 — Infrastructure Metrics
+
+Infrastructure events create failure modes that are completely invisible to the database. A query that reads the same data pages and executes the same plan can perform an order of magnitude worse when the underlying compute or storage is constrained. QueryComment monitors the following infrastructure signals:
+
+- **CPU utilization and saturation** — tracks both utilization percentage and run queue depth. A CPU at 70% utilization with a deep run queue indicates saturation, meaning threads are waiting to run even when the CPU appears to have headroom.
+- **Memory pressure and swap** — monitors available memory and swap activity. When the OS starts swapping database pages to disk, query latency increases dramatically and in ways that are hard to attribute from inside the database.
+- **Disk I/O throughput and latency** — separates read and write throughput, and distinguishes sequential from random I/O patterns. Random read latency is particularly important for databases that cannot serve queries from buffer cache.
+- **Network bandwidth** — relevant for replication traffic, cross-AZ reads, and high-volume result sets that can saturate instance network interfaces.
+
+### Cloud-specific signals
+
+Cloud infrastructure introduces failure modes that have no equivalent in on-premises deployments. QueryComment tracks these explicitly:
+
+- **AWS EBS burst credits (gp2 volumes)** — gp2 volumes can sustain 3,000 IOPS while their burst credit balance is positive, but drop to as low as 100 IOPS once the balance is exhausted. This is one of the most common causes of sudden, severe database slowdowns on AWS that looks like a query regression but is actually a storage constraint. QueryComment tracks burst credit balance and warns before exhaustion.
+- **CPU steal time** — on shared virtualized infrastructure, steal time measures CPU cycles your instance requested but did not receive because the hypervisor gave them to another tenant. High steal time causes latency that is indistinguishable from application-level slowness.
+- **GCP persistent disk IOPS budgets** — GCP persistent disks have per-volume IOPS limits that scale with disk size. QueryComment tracks I/O against the provisioned budget and detects when workloads approach the cap.
+- **GCP live migration events** — GCP migrates VM instances between physical hosts for maintenance without stopping them. These events introduce latency spikes of several seconds that are not caused by the database or application, and QueryComment annotates the timeline so you do not spend time investigating a non-issue.
+
+**Why this layer matters:** Infrastructure constraints are often misattributed as application bugs or query regressions. Without infrastructure visibility, you might spend hours optimizing a query that was running fine — while the actual problem is a depleted EBS burst credit balance that will refill on its own.
+
+## Why all three layers matter
+
+Single-layer monitoring tools give you symptoms without causes. Consider a real scenario:
+
+Your infrastructure dashboard shows CPU at 40%. Your APM tool shows average query latency is normal. No alerts have fired. From every dashboard you have, the database looks healthy.
+
+But one specific query fingerprint — the `orders`/`products` JOIN at the core of your product listing page — has drifted from 12ms to 28ms over the past eight days. The drift is gradual enough that no static threshold has triggered. The root cause: a long-running analytics transaction has been blocking autovacuum's ability to reclaim dead tuples on the `orders` table. The table has accumulated millions of dead tuples. The query planner's row count estimates are off. The buffer cache hit rate for `orders` pages has been quietly declining as live rows share cache space with dead ones.
+
+No single layer reveals this. The query layer shows the symptom. The engine layer shows the dead tuples and the blocked autovacuum. The infrastructure layer shows the rising disk read rate as the buffer cache stops being able to serve all `orders` page requests. QueryComment connects all three into a single finding: *terminate the idle transaction blocking autovacuum on `orders`*.
+
+<Tip>
+  The most valuable database insights come from correlating signals across layers, not from watching any one layer more carefully. See [Cross-Layer Correlation](/concepts/cross-layer-correlation) to understand how QueryComment's reasoning engine builds causal chains automatically.
+</Tip>

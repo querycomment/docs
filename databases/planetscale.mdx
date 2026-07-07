@@ -1,0 +1,115 @@
+---
+title: "PlanetScale Database Monitoring with QueryComment"
+sidebarTitle: "PlanetScale"
+description: "Vitess-aware query monitoring for PlanetScale — track VTGate routing overhead, schema deploy impact, scatter-gather patterns, and per-shard query performance."
+---
+
+PlanetScale is Vitess under the hood — horizontal MySQL scaling with VTGate handling query routing, connection pooling, and online schema migrations. Standard MySQL monitoring tools see queries after Vitess has already processed them, which means they miss VTGate routing time, scatter-gather overhead for cross-shard queries, and the rewriting Vitess applies to queries before they reach MySQL. QueryComment tracks query performance through the full PlanetScale stack, from the moment a query enters VTGate to the per-shard MySQL execution that fulfills it.
+
+## Why Vitess-Based MySQL Requires Vitess-Aware Monitoring
+
+When you connect to PlanetScale, your queries don't go directly to MySQL. They go to VTGate, which decides how to route them. VTGate may:
+
+- Route a query directly to a single shard (the fast path)
+- Fan a query out to multiple shards in parallel (scatter-gather) and merge the results
+- Rewrite the query to account for sharding key transformations
+- Queue the query during an online schema migration
+
+Each of these paths has a different performance profile. A query that takes 2ms on a single shard might take 40ms as a scatter-gather across twelve shards — not because the query is slow, but because the routing path is expensive. Without Vitess-aware monitoring, you see the 40ms and don't know why.
+
+QueryComment exposes the full routing decision for each query class: which path VTGate chose, how many shards were contacted, what the per-shard execution time was, and what the merge overhead looked like. This gives you the context to decide whether a slow query needs index work or needs a sharding key added to its `WHERE` clause.
+
+## Schema Deploy Request Impact Analysis
+
+PlanetScale's online schema migrations run as Deploy Requests — schema changes you propose, preview, and merge without locking tables. The migration runs in the background, and when it's complete you merge the Deploy Request.
+
+The merge is the moment of risk. QueryComment captures a performance baseline for every query class in the 24 hours before a Deploy Request merges, then compares post-deploy performance against that baseline within minutes of the merge completing.
+
+If a new index causes the query planner to choose a different execution path — better or worse — you see it immediately. If a column rename or type change causes the client-side ORM to generate different SQL, QueryComment flags the query class as changed and surfaces the before/after comparison.
+
+<Note>
+  QueryComment correlates Deploy Request merges with query performance automatically when it detects the schema change. You don't need to manually mark deploys in the dashboard — QueryComment identifies the timing from changes in query plan fingerprints.
+</Note>
+
+Regressions within the first 30 minutes of a Deploy Request merge can still be reverted in PlanetScale using the revert window. QueryComment's fast regression detection gives you the signal you need to act within that window.
+
+## Sharding and Cross-Shard Query Detection
+
+Scatter queries — queries that don't include the sharding key in their `WHERE` clause — fan out to every shard in the cluster. On a small cluster this is tolerable; on a large one it's a performance problem that compounds as you add shards.
+
+QueryComment detects scatter query patterns by tracking VTGate's routing decisions. For every query class, it shows you:
+
+- **Scatter frequency:** what percentage of executions are scatter queries vs. single-shard
+- **Scatter latency:** how scatter execution time compares to routed execution time for the same query class
+- **Missing sharding key patterns:** which queries are scattering and what their `WHERE` clause looks like, so you know exactly what to add
+
+When a query class starts scattering after a code change — because a developer removed a filter, or the ORM generated a slightly different query — QueryComment surfaces that change in the scatter frequency trend.
+
+```sql
+-- Example: this query scatters if customer_id is the sharding key
+-- and it's absent from the WHERE clause
+SELECT * FROM orders WHERE status = 'pending' AND created_at > NOW() - INTERVAL 1 DAY;
+
+-- Adding the sharding key routes it to a single shard
+SELECT * FROM orders WHERE customer_id = ? AND status = 'pending' AND created_at > NOW() - INTERVAL 1 DAY;
+```
+
+<Warning>
+  A sudden increase in scatter query frequency is one of the most common causes of unexpected latency spikes on PlanetScale. If your p99 latency climbs after a deploy and you don't see a slow query, check the scatter frequency report first.
+</Warning>
+
+## VTGate and Connection Pool Monitoring
+
+VTGate manages connection pooling between your application and the underlying MySQL shards. QueryComment monitors VTGate directly, tracking:
+
+- **Query routing latency:** time VTGate spends making routing decisions before MySQL execution begins
+- **Tablet health:** status of each MySQL tablet (primary and replica) in the cluster, with alerts when a tablet becomes unhealthy or is taken out of rotation
+- **Connection balancing:** distribution of connections across tablets, with detection of imbalances that cause hot spots
+- **Connection pool saturation:** when the pool approaches its limit, queuing latency increases. QueryComment surfaces this before it becomes an error.
+
+When a tablet is taken out of rotation for maintenance or fails a health check, VTGate redistributes its load. QueryComment marks these events on the timeline so you can correlate them with any latency increase that follows.
+
+## Setup
+
+<Steps>
+  <Step title="Get Your PlanetScale Connection String">
+    In the PlanetScale dashboard, navigate to your database and select the branch you want to monitor. Click **Connect**, choose **Connect with MySQL CLI** or your preferred language, and copy the connection string.
+
+    ```
+    mysql://[username]:[password]@aws.connect.psdb.cloud/[database]?sslmode=require
+    ```
+
+    <Info>
+      PlanetScale connection strings include a username scoped to a specific branch. Create a separate monitoring password for QueryComment rather than using an application credential.
+    </Info>
+  </Step>
+
+  <Step title="Create a Read-Only Service Token">
+    In the PlanetScale dashboard, go to **Settings → Service Tokens** and create a new token with the **Read-only** role scoped to the database you're monitoring. Use this token's credentials in the QueryComment connection string rather than your personal account credentials.
+  </Step>
+
+  <Step title="Deploy the QueryComment Agent">
+    The agent connects to PlanetScale via the standard MySQL protocol. It automatically detects the Vitess layer and enables PlanetScale-specific monitoring:
+
+    ```bash
+    docker run --rm \
+      -e QC_DATABASE_URL="mysql://querycomment_monitor:password@aws.connect.psdb.cloud/[database]?sslmode=require" \
+      querycomment/agent:latest
+    ```
+  </Step>
+
+  <Step title="Connect Additional Branches">
+    Repeat the connection process for any additional branches you want to monitor — typically your `staging` and `development` branches alongside `main`. In the QueryComment dashboard, label each connection with its branch role so the Deploy Request impact comparison view can map pre-deploy baselines to the correct branch.
+  </Step>
+
+  <Step title="Verify VTGate Monitoring">
+    In the QueryComment dashboard, navigate to **Query Routing**. Confirm you can see per-query routing decisions and that scatter vs. routed breakdowns are populating. Run a known scatter query against your database to verify detection:
+
+    ```sql
+    -- Replace with a table from your schema to trigger a scatter
+    SELECT COUNT(*) FROM your_sharded_table;
+    ```
+
+    QueryComment should label this execution as a scatter query in the routing view within one collection interval.
+  </Step>
+</Steps>

@@ -1,0 +1,113 @@
+---
+title: "AWS Aurora PostgreSQL and MySQL Monitoring"
+sidebarTitle: "Aurora"
+description: "Three-layer observability for Aurora that goes beyond Performance Insights and CloudWatch — correlate query regressions with storage, failover, and replication events."
+---
+
+AWS Aurora gives you Performance Insights for top SQL by wait time and CloudWatch for infrastructure metrics — but neither tool connects the two layers. When CPU spikes during a background storage reclamation event and a query starts doing a full table scan in the same window, Performance Insights shows you the slow query and CloudWatch shows you the I/O spike, but nothing tells you they're related. QueryComment correlates query-level execution data with Aurora-specific storage, replication, and failover signals so you can find causes, not just symptoms.
+
+## Gaps in Aurora's Built-In Monitoring
+
+Performance Insights and CloudWatch are necessary — QueryComment doesn't replace them. What they can't do:
+
+- **Explain why a query regressed**, not just that it did. A query that was index-scanning yesterday and full-table-scanning today requires execution plan history, not average latency.
+- **Correlate query latency with Aurora-specific infrastructure events** — storage autoscaling, checkpoint activity, autovacuum, failover, and WAL handling all affect query performance in ways that aren't visible at the query layer alone.
+- **Distinguish reader latency causes** — when a reader instance slows down, the cause might be replication lag, a cold buffer cache after failover, an uneven connection distribution, or a genuine query plan change. Each has a different fix.
+- **Track per-instance query performance** in a multi-reader cluster. CloudWatch gives you per-instance infrastructure metrics; Performance Insights is per-instance too, but doesn't cross-correlate across the cluster.
+
+## Aurora PostgreSQL Monitoring
+
+QueryComment connects to Aurora PostgreSQL via the underlying PostgreSQL interface and reads from `pg_stat_statements` alongside Aurora-specific storage metrics. This gives you query execution history, buffer pool hit ratios, checkpoint activity, and autovacuum behavior — all correlated on the same timeline.
+
+Aurora PostgreSQL uses a different storage architecture than standard PostgreSQL. WAL handling, checkpoint behavior, and I/O patterns differ from what you'd see on RDS PostgreSQL or self-hosted Postgres. QueryComment accounts for these differences so the metrics it surfaces are interpreted correctly for Aurora's architecture rather than mapped from generic Postgres assumptions.
+
+Key metrics QueryComment tracks for Aurora PostgreSQL:
+
+- Per-query execution plans over time, with plan change detection
+- Buffer pool hit ratio correlated with storage volume read latency
+- Autovacuum activity and its effect on table access patterns
+- Checkpoint frequency and its correlation with write latency spikes
+- Aurora storage volume bytes read/written per query workload bucket
+
+<Note>
+  QueryComment connects to both the writer endpoint and reader endpoints independently. This lets it track query performance per instance and detect when the writer and readers are seeing different execution behavior for the same query.
+</Note>
+
+## Aurora MySQL Monitoring
+
+For Aurora MySQL, QueryComment connects via `performance_schema` and `information_schema`. Aurora MySQL's multi-AZ architecture introduces failure modes that standard MySQL monitoring misses entirely.
+
+**Writer failover:** When Aurora promotes a reader to writer, the old writer's connections drop and applications must reconnect to the new writer endpoint. QueryComment detects the failover event, marks it on the timeline, and correlates the connection interruption duration with the recovery behavior of your connection pool.
+
+**Reader lag during write-heavy workloads:** Aurora MySQL replicates from the writer to readers asynchronously. Under heavy write load, readers can fall behind. QueryComment tracks per-reader replication lag and correlates it with read query latency on those readers — so you can tell whether slow reads are a lag problem or a query problem.
+
+**DNS propagation delays:** After an endpoint change (failover, maintenance, instance replacement), Aurora updates DNS. Applications using cached DNS may continue hitting the old endpoint for seconds to minutes. QueryComment tracks connection errors and reconnection patterns that indicate DNS propagation delays so you can tune your application's DNS TTL accordingly.
+
+**InnoDB internals:** Beyond what Performance Insights surfaces, QueryComment tracks InnoDB buffer pool utilization, page eviction rates, mutex and lock wait patterns, and redo log write throughput — all at the individual query level where possible.
+
+## Cross-Cluster Correlation
+
+In a multi-reader Aurora cluster, query performance can diverge across instances even when all instances are healthy and caught up. Common causes:
+
+- Uneven connection distribution (a connection balancer issue or application-side connection pool misconfiguration)
+- Buffer cache differences — a reader that recently restarted has a cold cache; one that has been running under steady load has a warm one
+- Isolated vacuum or statistics update activity on specific instances
+
+QueryComment tracks query performance per instance and surfaces divergence automatically. When one reader starts returning higher latency for a query that the other readers are handling normally, you see that in the cross-instance comparison view immediately.
+
+For **Aurora Global Database**, QueryComment monitors cross-region replication lag and correlates it with query performance on secondary regions. When your global secondary region shows elevated read latency, you can immediately check whether lag has increased — and whether that lag is masking stale data reads that should be served from the primary.
+
+## Setup
+
+<Steps>
+  <Step title="Identify Your Endpoints">
+    You'll connect QueryComment to the writer endpoint and each reader endpoint separately. In the AWS RDS console, navigate to your Aurora cluster and note:
+
+    - **Writer endpoint** (e.g., `my-cluster.cluster-xxxx.us-east-1.rds.amazonaws.com`)
+    - **Reader endpoint** (e.g., `my-cluster.cluster-ro-xxxx.us-east-1.rds.amazonaws.com`)
+    - Any **individual instance endpoints** you want to monitor separately
+
+    <Tip>
+      Connecting to individual instance endpoints (rather than only the cluster-level reader endpoint) gives you per-instance performance data, which is required for cross-instance divergence detection.
+    </Tip>
+  </Step>
+
+  <Step title="Create a Monitoring User">
+    **Aurora PostgreSQL:**
+    ```sql
+    CREATE ROLE querycomment_monitor WITH LOGIN PASSWORD 'choose-a-strong-password';
+    GRANT pg_monitor TO querycomment_monitor;
+    GRANT SELECT ON ALL TABLES IN SCHEMA pg_catalog TO querycomment_monitor;
+    ```
+
+    **Aurora MySQL:**
+    ```sql
+    CREATE USER 'querycomment_monitor'@'%' IDENTIFIED BY 'choose-a-strong-password';
+    GRANT SELECT, PROCESS, REPLICATION CLIENT ON *.* TO 'querycomment_monitor'@'%';
+    GRANT SELECT ON performance_schema.* TO 'querycomment_monitor'@'%';
+    ```
+  </Step>
+
+  <Step title="Configure Security Group Access">
+    The QueryComment agent must be able to reach your Aurora cluster on port `5432` (PostgreSQL) or `3306` (MySQL). Add an inbound rule to your Aurora security group allowing traffic from the agent's IP or security group.
+
+    <Warning>
+      Do not open Aurora security groups to `0.0.0.0/0`. Scope the inbound rule to the specific IP address or security group of the host running the QueryComment agent.
+    </Warning>
+  </Step>
+
+  <Step title="Deploy the Agent">
+    ```bash
+    docker run --rm \
+      -e QC_DATABASE_URL="postgresql://querycomment_monitor:password@my-cluster.cluster-xxxx.us-east-1.rds.amazonaws.com:5432/mydb" \
+      -e QC_READER_URLS="postgresql://querycomment_monitor:password@my-cluster.cluster-ro-xxxx.us-east-1.rds.amazonaws.com:5432/mydb" \
+      querycomment/agent:latest
+    ```
+
+    Pass multiple reader URLs as a comma-separated list if you want per-instance monitoring for individual reader endpoints.
+  </Step>
+
+  <Step title="Verify Cluster Topology Detection">
+    In the QueryComment dashboard, navigate to your Aurora cluster view. Confirm that the writer and reader instances are listed correctly and that replication lag is being tracked. For Aurora Global Database clusters, confirm that secondary regions appear in the topology view.
+  </Step>
+</Steps>

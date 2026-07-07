@@ -1,0 +1,128 @@
+---
+title: "How QueryComment Works: Three-Layer Database Observability"
+sidebarTitle: "How It Works"
+description: "QueryComment collects data from three layers of your database stack and uses a causal reasoning engine to explain why performance problems occur."
+---
+
+QueryComment is built on the idea that database performance problems rarely have a single cause. A slow query isn't just a slow query — it might be a symptom of table bloat, which is a symptom of a blocked autovacuum process, which was caused by a long-running transaction, while an EBS volume quietly burned through its burst credits in the background. To surface that chain reliably, you have to watch all three layers of the stack at once: the queries themselves, the engine internals that govern their execution, and the infrastructure underneath. QueryComment does exactly that — and then connects the layers with a causal reasoning engine so you see one finding, not four unrelated alerts.
+
+## Three-Layer Architecture
+
+<CardGroup cols={3}>
+  <Card title="Layer 1: Query Analysis" icon="magnifying-glass">
+    Fingerprints every query, tracks latency percentiles, execution counts, rows examined/returned, and buffer hit rates. Detects sequential scan regressions and N+1 patterns at sub-minute granularity.
+  </Card>
+  <Card title="Layer 2: Engine Internals" icon="gear">
+    Monitors autovacuum, buffer pool, lock contention, WAL generation, and replication state for PostgreSQL. Monitors InnoDB buffer pool, adaptive hash index, redo log, purge lag, and row lock waits for MySQL.
+  </Card>
+  <Card title="Layer 3: Infrastructure Metrics" icon="server">
+    Tracks CPU (with run queue depth), memory pressure, disk I/O, and network. Captures cloud-specific signals: EBS burst credit exhaustion, CPU steal time, GCP disk IOPS budgets, and live migration events.
+  </Card>
+</CardGroup>
+
+## Layer 1: Query Analysis
+
+QueryComment ingests query telemetry directly from `pg_stat_statements` on PostgreSQL and `performance_schema` on MySQL. No query proxy is required, and no application code changes are needed.
+
+Every unique query is reduced to a **fingerprint** — a normalized form that strips literal values so that `SELECT * FROM orders WHERE id = 1` and `SELECT * FROM orders WHERE id = 9999` are treated as the same query pattern. This lets QueryComment track the statistical behavior of a query across millions of executions rather than treating each call in isolation.
+
+For each fingerprint, QueryComment tracks:
+
+- **Latency percentiles** — p50, p95, and p99 execution times, computed from cumulative stats at sub-minute poll intervals
+- **Execution count and rate** — total calls and calls per second, used to distinguish a slow-per-call query from a high-frequency query accumulating total latency
+- **Rows examined vs. rows returned** — a high ratio signals full or partial table scans that an index could eliminate
+- **Buffer hit rate** — the percentage of data pages served from shared buffers vs. read from disk; a declining hit rate on a specific query often precedes latency degradation
+
+QueryComment also applies pattern-level heuristics to flag:
+
+- **Sequential scan regressions** — queries that were previously using an index but have switched to a sequential scan, often caused by a statistics staleness or a plan regression after an autovacuum analyze
+- **N+1 patterns** — a high-frequency low-latency query executed in a tight loop, typically indicating an ORM-generated N+1 that becomes expensive under load
+
+## Layer 2: Engine Internals
+
+Engine internals explain *how* the database is executing those queries under the hood. A query fingerprint alone can't tell you whether slow execution is caused by lock waits, buffer eviction, or background maintenance work competing for I/O. Layer 2 can.
+
+**PostgreSQL engine metrics**
+
+- **Autovacuum activity** — which tables are being vacuumed, when each last ran, dead tuple accumulation rates, and whether autovacuum is falling behind. A bloated table with a high dead tuple ratio will cause sequential scans to read significantly more pages than necessary.
+- **Buffer pool utilization** — shared buffer hit rate at the cluster level, block reads vs. block hits, and which relations are consuming the most buffer space
+- **Lock contention** — active locks, lock waits, and lock queue depth. Long-running transactions that hold locks are a common cause of cascading slowdowns.
+- **WAL generation rate** — writes per second to the write-ahead log, useful for correlating I/O spikes with specific workload changes
+- **Replication state** — replication lag, slot retention, and standby connection health
+
+**MySQL engine metrics**
+
+- **InnoDB buffer pool** — page hit rate, dirty page ratio, read-ahead efficiency, and eviction pressure
+- **Adaptive hash index** — hit/miss ratio and whether AHI is helping or hurting for your workload
+- **Redo log utilization** — how full the redo log is; a nearly full redo log forces InnoDB to flush dirty pages aggressively, causing latency spikes
+- **Purge lag** — the number of undo log records waiting to be purged; high purge lag indicates long-running transactions are holding back MVCC cleanup
+- **Row lock waits** — lock wait counts, timeouts, and deadlock frequency
+
+## Layer 3: Infrastructure Metrics
+
+Even a perfectly tuned database will degrade if the infrastructure beneath it is saturated. Layer 3 gives QueryComment visibility into the physical and virtualized resources the database engine depends on.
+
+**Baseline infrastructure signals**
+
+- **CPU** — utilization percentage plus run queue depth. A CPU that is 70% utilized but has a run queue of 8 is far more constrained than one at 90% with a queue of 1.
+- **Memory pressure** — available memory, swap utilization, and page fault rates. Memory pressure can cause the OS to evict database buffer pages, collapsing the buffer hit rate observed in Layer 2.
+- **Disk I/O** — read and write throughput, IOPS, and — critically — I/O latency. Disk latency is the metric that most directly translates to query latency when data isn't in memory.
+- **Network** — throughput and packet retransmission rates, relevant for replication lag and client connection behavior
+
+**Cloud-specific signals**
+
+Cloud infrastructure introduces resource budgets and noisy-neighbor effects that bare-metal monitoring tools miss:
+
+- **AWS EBS burst credits** — `gp2` and some `gp3` volumes accrue IOPS burst credits that deplete under sustained load. QueryComment tracks credit balance and correlates exhaustion events with query latency spikes.
+- **CPU steal time** — on shared virtualized hosts, steal time indicates the hypervisor is giving your vCPUs to other tenants. High steal time looks identical to a CPU bottleneck from inside the VM.
+- **GCP persistent disk IOPS budgets** — GCP disk IOPS scale with disk size; QueryComment monitors budget consumption and flags when you're approaching provisioned limits.
+- **Live migration events** — both AWS and GCP can live-migrate VMs for maintenance. These events appear as brief I/O stalls that look like disk problems without cloud-layer context.
+
+## The Causal Reasoning Engine
+
+Collecting three layers of metrics simultaneously is necessary but not sufficient. If you display them side-by-side you still have three dashboards to correlate by hand. QueryComment's causal reasoning engine automates that correlation.
+
+When the engine detects an anomaly — say, a rising p95 latency trend on a specific query fingerprint — it searches for co-occurring anomalies in the engine and infrastructure layers that are temporally and statistically correlated. It then applies a directed causal graph model to evaluate whether the correlations are consistent with known causal pathways in PostgreSQL and MySQL internals.
+
+The result is a **causal chain**: an ordered sequence of contributing factors, each linked to the next, expressed in plain language. For example:
+
+> Query `SELECT … FROM orders JOIN products …` p95 latency drifted +340% over 4 hours → correlated with rising dead tuple count on `orders` (autovacuum blocked by long-running transaction on connection 47) → buffer cache eviction of `orders` pages → disk read I/O saturation on EBS volume (burst credits at 12%).
+
+Statistical methods are used throughout to distinguish genuine causal relationships from coincidental temporal correlations — the engine won't surface a finding unless the signal passes confidence thresholds calibrated against historical false-positive rates.
+
+## Drift Detection vs. Static Thresholds
+
+Static thresholds are the dominant model in database monitoring, and they have a fundamental flaw: they only fire after the problem is already severe. If your normal p99 is 80 ms and your threshold is 500 ms, you won't get an alert during the slow creep from 80 ms to 490 ms — which is exactly where QueryComment operates.
+
+QueryComment uses **exponential weighted moving models** to build a baseline for every query fingerprint individually. The model weights recent observations more heavily than older ones, so it adapts to workload changes without being fooled by them. When a query's observed latency deviates from its predicted value by a statistically significant margin — even if the absolute value is still well below any traditional threshold — drift detection fires.
+
+Baselines are also **seasonality-aware**. A query that is naturally slower on Monday mornings due to batch reporting jobs will have a higher expected latency at that time; drift detection compares observed values against the seasonal expectation, not a flat average. This eliminates a major source of false positives and means alerts carry high signal value.
+
+The practical result: QueryComment typically flags latency regressions **hours to days before** a static threshold would fire — giving you time to investigate and remediate before users notice.
+
+## A Concrete Example
+
+Here's how QueryComment's three-layer approach works end-to-end on a real-world scenario.
+
+**Setup:** A SaaS application running on PostgreSQL on AWS RDS with `gp3` EBS storage. A background analytics job runs nightly and holds an open transaction for several hours while exporting data.
+
+**What happens:**
+
+1. The long-running export transaction prevents autovacuum from cleaning dead tuples on the `orders` table, because autovacuum cannot advance past the transaction's snapshot horizon.
+2. Dead tuples accumulate on `orders`. The table grows physically larger than its live data warrants.
+3. A high-frequency `SELECT … FROM orders JOIN products …` query begins scanning more pages per execution as the table bloats. Its p95 latency drifts upward — slowly at first, imperceptibly to any static threshold.
+4. The increased page reads start evicting hot `products` table pages from the shared buffer pool. The buffer hit rate on `products` begins declining.
+5. The additional physical reads stress the EBS volume. Burst credits, which were comfortably replenishing overnight, begin depleting. As credits fall below a threshold, provisioned IOPS become the ceiling, and disk read latency increases sharply.
+6. The compounding effect causes the `orders/products` JOIN query's p95 latency to spike from 120 ms to 850 ms within a two-hour window.
+
+**What QueryComment surfaces:**
+
+- **Layer 1:** Drift detection flags the `orders/products` JOIN query fingerprint 3 hours before the spike, when latency has drifted only 40% above baseline
+- **Layer 2:** Autovacuum blockage on `orders` is flagged; dead tuple accumulation rate is anomalous; buffer hit rate on `products` is declining
+- **Layer 3:** EBS burst credit balance correlated with increasing I/O read latency
+
+**The finding:**
+
+> Drift detected on `SELECT … FROM orders JOIN products …` (p95 +40%, 3h trend) → autovacuum blocked on `orders` by long-running transaction (connection 12, open 6h 14m) → dead tuple bloat causing sequential over-scan → buffer eviction of `products` pages → EBS burst credit depletion (14% remaining). Recommended action: terminate or investigate long-running transaction on connection 12.
+
+One finding. Full causal chain. Surfaced before users notice.

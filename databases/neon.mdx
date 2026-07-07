@@ -1,0 +1,113 @@
+---
+title: "Monitor Neon Serverless Postgres Performance"
+sidebarTitle: "Neon"
+description: "Cold start detection, autoscaling latency correlation, and branch-aware query performance monitoring built for Neon's serverless Postgres architecture."
+---
+
+Neon rewrites the rules of Postgres infrastructure — compute scales to zero when idle, storage lives separately from compute, and branches give every developer and CI pipeline their own database. Traditional Postgres monitoring tools weren't built for any of this. They can't distinguish a cold-start latency spike from a query regression, can't tell you whether the branch your staging environment uses reflects production's query performance, and have no concept of the pageserver that sits between your compute and your data. QueryComment was designed from the ground up to account for Neon's architecture.
+
+## Neon-Specific Performance Challenges
+
+Neon introduces performance characteristics that don't exist in classic always-on Postgres deployments. Understanding them is the first step to monitoring them effectively.
+
+<CardGroup cols={3}>
+  <Card title="Cold Start Latency" icon="snowflake">
+    When a compute endpoint has been idle long enough to scale to zero, the first query after wakeup pays a startup cost that can reach several hundred milliseconds. This is expected behavior — but without labeling, it looks identical to a regression.
+  </Card>
+  <Card title="Autoscaling Variance" icon="arrows-up-down">
+    As compute units scale up or down in response to load, queries in flight during the transition experience latency variance. Autoscaling is a feature, not a bug — but that variance needs to be visible and understood, not treated as noise.
+  </Card>
+  <Card title="Branch Performance Drift" icon="code-branch">
+    Branches share data at the storage layer but have independent compute and statistics. A branch created from a week-old snapshot may have stale `pg_statistics`, causing the planner to choose different execution plans than production — silently changing query performance.
+  </Card>
+</CardGroup>
+
+## Cold Start and Autoscaling Monitoring
+
+QueryComment tracks the state of each compute endpoint — `idle`, `starting`, `active`, and `scaling` — and correlates every query's latency with the state the endpoint was in when the query ran.
+
+When a cold start occurs, QueryComment labels that event explicitly in the query timeline. You see a spike, you see the label, and you know not to chase it as a regression. This matters especially in staging and preview environments, where endpoints are frequently idle between deploys and test runs.
+
+For autoscaling, QueryComment tracks compute unit allocation over time alongside p50, p95, and p99 query latency. When you see latency variance, you can immediately check whether it correlated with a scale-up or scale-down event — and tune your minimum and maximum CU settings accordingly.
+
+<Tip>
+  If your application has a latency SLA and you're running on Neon, set a minimum compute unit allocation above zero for your production endpoint. QueryComment's autoscaling correlation report will show you exactly how much of your observed latency variance is attributable to scaling events vs. actual query regressions.
+</Tip>
+
+QueryComment also baselines the post-startup warmup curve for each endpoint. The first several seconds after a cold start have predictably higher latency as caches warm. QueryComment learns that curve and treats it as expected behavior so it doesn't generate false-positive regression alerts.
+
+## Branch-Aware Performance Tracking
+
+QueryComment monitors each Neon branch independently and lets you compare query performance across them in a single view.
+
+**Development and staging branches** often have different data distributions than production. A query that runs in 5ms on production because the planner correctly estimates a small result set might run in 500ms on a branch with a different data snapshot and stale statistics. QueryComment surfaces these discrepancies before they surprise you after a promotion.
+
+**CI and preview branches** fire up for a test run and scale back to zero immediately. QueryComment tracks their query profiles over time so you can catch migration-introduced regressions in CI rather than in production.
+
+**Statistics staleness detection:** When a branch is created, it inherits the parent's data but starts with its own compute. If `ANALYZE` hasn't run since the branch was created, the planner is working with statistics from the parent snapshot. QueryComment detects stale `pg_statistics` on branches and alerts you, so you know to run `ANALYZE` before trusting the branch's query performance as representative.
+
+```sql
+-- Run this on a new branch to refresh planner statistics
+ANALYZE;
+```
+
+<Note>
+  QueryComment tracks branch lineage — it knows which branch a given compute endpoint belongs to and when that branch was created. This lets it flag statistics staleness automatically without you having to track it manually.
+</Note>
+
+## Storage-Compute Separation Effects
+
+Neon's storage architecture separates compute from a distributed storage layer called the pageserver. Reads that aren't satisfied by the local buffer cache must fetch pages from the pageserver. On a warm, active endpoint, most reads are satisfied locally. On a freshly started endpoint, or on a branch with a cold cache, a much higher fraction of reads go to the pageserver — and those reads are slower.
+
+QueryComment tracks the ratio of local buffer hits to pageserver fetches. This metric tells you:
+
+- **How warm your cache is** after a cold start or failover
+- **Whether your working set fits in memory** for your current compute unit size
+- **Whether branch performance differences** are cache-related or plan-related
+
+The warmup curve baseline means QueryComment knows what a "normal" cache hit ratio looks like in the first 30 seconds after a cold start, and won't alert you during that window unless the cache behavior is genuinely abnormal.
+
+## Setup
+
+<Steps>
+  <Step title="Locate Your Connection String">
+    In the Neon console, navigate to your project and select the branch you want to monitor first (start with your production branch). Click **Connect** and copy the connection string.
+
+    ```
+    postgresql://[user]:[password]@[endpoint-id].us-east-2.aws.neon.tech/[dbname]?sslmode=require
+    ```
+
+    <Info>
+      You'll add additional branches after the initial setup. Start with production so QueryComment can establish a performance baseline before you connect branches for comparison.
+    </Info>
+  </Step>
+
+  <Step title="Create a Read-Only Monitoring Role">
+    Connect to your Neon database and create a dedicated role for QueryComment:
+
+    ```sql
+    CREATE ROLE querycomment_monitor WITH LOGIN PASSWORD 'choose-a-strong-password';
+    GRANT pg_monitor TO querycomment_monitor;
+    ```
+  </Step>
+
+  <Step title="Deploy the QueryComment Agent">
+    Run the agent with your Neon connection string. The agent automatically detects that it's connected to a Neon endpoint and enables Neon-specific monitoring:
+
+    ```bash
+    docker run --rm \
+      -e QC_DATABASE_URL="postgresql://querycomment_monitor:password@[endpoint-id].us-east-2.aws.neon.tech/[dbname]?sslmode=require" \
+      querycomment/agent:latest
+    ```
+
+    The agent remains connected and resumes automatically when a scaled-to-zero endpoint wakes up. It does not hold an idle connection that would prevent the endpoint from scaling down.
+  </Step>
+
+  <Step title="Add Additional Branches">
+    Once your production branch is connected and baseline data is flowing, add your staging and development branches from the QueryComment dashboard under **Databases → Branches → Add Branch**. Paste each branch's connection string and assign it a role (production, staging, development, CI) so the comparison views are labeled correctly.
+  </Step>
+
+  <Step title="Verify Cold Start Detection">
+    Let your production endpoint go idle for a few minutes, then trigger a request. In the QueryComment dashboard, navigate to **Query Timeline** and confirm you see a cold-start event labeled on the latency spike. This confirms that cold-start labeling is active and future spikes from this cause will not generate regression alerts.
+  </Step>
+</Steps>

@@ -1,0 +1,65 @@
+---
+title: "Database Observability for Fintech and Payments Teams"
+sidebarTitle: "Fintech"
+description: "QueryComment detects transaction deadlocks, ledger query regressions, and replication lag before they impact customers or trigger SLA violations."
+---
+
+Fintech databases don't get acceptable latency — they get committed latency. Fifty milliseconds slower on a payment authorization can fail an SLA, trigger a retry storm from the upstream client, and cascade into a settlement window miss that takes hours to unwind. The margin for "we'll investigate after the incident" doesn't exist when your database is processing transactions that move real money. QueryComment gives payments and fintech teams continuous visibility into the database behaviors that precede failures, so you can intervene before the window closes.
+
+## Why fintech databases are different
+
+Ledger databases aren't just high-throughput OLTP systems — they're enforcing correctness guarantees at the row level on every write. Double-entry accounting means every transaction touches at least two rows and must leave the ledger balanced. Balance reconciliation reads must reflect committed state. Audit trail writes happen inside the same transaction boundary as the business logic they're recording.
+
+This creates a workload that's unusually sensitive to lock contention, replication lag, and query plan changes. A sequential scan that would be a minor nuisance in another context becomes a serious problem when it's sitting inside a transaction that's holding locks on balance rows. A replica that's 10 seconds behind is a risk when reads against it are used to make authorization decisions.
+
+Your SLAs aren't aspirational — they're contractual. And your database is where most of the latency budget gets spent.
+
+## Failure modes QueryComment catches early
+
+### Transaction deadlocks
+
+Deadlocks in payment systems follow a predictable pattern: two concurrent transfers lock rows in opposite order, each waits for the other, and both hang until the database kills one of them. A single deadlock means a failed transaction and a retry. At low frequency, retries succeed and nobody notices. At high frequency, retry storms build and your checkout flow starts hanging for 30 seconds.
+
+The dangerous part is that deadlock frequency tends to accelerate. You go from two per hour to twenty per hour before you notice the trend, and from twenty per hour to two hundred per minute before the system becomes unstable. QueryComment tracks deadlock frequency as a time-series signal and flags acceleration in the trend — not just absolute counts — so you catch the inflection point before it becomes systemic.
+
+### Ledger query regressions
+
+A schema migration adds a column to your transactions table. The query planner recalculates costs for every query that touches that table. A balance lookup that was using an index path switches to a sequential scan. Latency goes from 3ms to 180ms. This doesn't show up in staging because the staging table has thousands of rows, not hundreds of millions.
+
+QueryComment tracks query execution plans across deployments. When a plan changes — when an index scan becomes a sequential scan, when a nested loop becomes a hash join — that change is flagged immediately, attributed to the deployment that caused it, and correlated with the latency shift that follows. You don't wait three days for your largest customers to report slowness. You see the regression within minutes of the migration landing.
+
+<Warning>
+  Ledger query regressions are particularly dangerous because the queries involved — balance lookups, transaction history reads — are called on every payment flow. A 60x latency regression on a query that runs thousands of times per minute will saturate your connection pool long before it shows up as a user-facing error.
+</Warning>
+
+### Replication lag during settlement windows
+
+End-of-day batch processing puts unusual write pressure on your primary. WAL throughput spikes. Read replicas fall behind. If your application is routing balance reads to replicas — which is standard practice for reducing primary load — those reads are now returning stale data. In a payments context, a stale balance read can mean an authorization decision made against incorrect data.
+
+QueryComment monitors replication lag in context: not just the lag number, but the actual query workload running against the replica and the WAL throughput on the primary. When lag starts building during your settlement window, you see it in relation to the queries that are being affected — which ones are running against lagged replicas, and how stale the data they're reading actually is.
+
+<Info>
+  Replication lag isn't always a steady climb — it can spike suddenly when a large batch write hits the WAL. QueryComment's infrastructure layer tracks WAL generation rate alongside application query patterns, so you see the cause and the effect together.
+</Info>
+
+## Compliance implications
+
+PCI-DSS Requirement 10 mandates monitoring of all access to cardholder data — not just authentication events, but database-level access patterns. You need to know when new query patterns appear on PCI-scoped tables, when access frequency changes in ways that aren't explained by normal application behavior, and when query plan changes increase lock contention on sensitive data tables.
+
+QueryComment provides continuous visibility into database behavior changes, not periodic snapshots. When a new query pattern appears on a table in your PCI scope, you get an immediate notification — not a report at the end of the day. When a plan change on a cardholder data table increases lock contention or extends transaction duration, that change is captured with full context: which deployment introduced it, which queries are affected, and what the downstream impact looks like.
+
+<Note>
+  QueryComment's audit trail of query behavior changes supports PCI-DSS Requirement 10.6 (review of logs and security events) by giving compliance teams a continuous, timestamped record of database access pattern changes — without requiring them to parse raw database logs.
+</Note>
+
+## Why "check the dashboard after the incident" is too late for fintech
+
+Most observability tools are built around a reactive workflow: something breaks, an alert fires, you open the dashboard to understand what happened. That workflow assumes you have time to respond after the failure, and that the failure is recoverable. In payments, neither assumption holds.
+
+A settlement window miss isn't recoverable in the moment — it generates reconciliation work that takes hours and involves counterparties outside your system. A deadlock storm during peak transaction volume doesn't wait for you to diagnose it. A replica that's serving stale balances during end-of-day processing has already served those reads by the time you notice the lag.
+
+QueryComment is built around proactive detection. Drift in query performance, acceleration in deadlock frequency, early replication lag during batch windows — these are the signals that precede failures, not the signals that accompany them. The goal is to give your team an intervention window measured in hours or days, not seconds.
+
+<Tip>
+  The most valuable thing QueryComment does for fintech teams isn't explaining what went wrong after an incident — it's identifying the query behaviors and infrastructure signals that predict an incident, while there's still time to act.
+</Tip>

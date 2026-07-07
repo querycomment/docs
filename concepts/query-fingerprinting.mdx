@@ -1,0 +1,99 @@
+---
+title: "Query Fingerprinting: Track Every Query Pattern Over Time"
+sidebarTitle: "Query Fingerprinting"
+description: "QueryComment normalizes SQL statements into fingerprints to group identical query patterns regardless of parameters, enabling per-query baseline tracking and regression detection."
+---
+
+Your application runs thousands of queries per minute, and nearly every one of them has different parameter values. A product listing page might execute the same JOIN query tens of thousands of times per hour with a different `user_id` each time. Without normalization, those are tens of thousands of distinct queries — impossible to track, impossible to baseline, impossible to detect regressions in. Query fingerprinting solves this by stripping parameter values from SQL statements and grouping structurally identical queries under a single fingerprint. QueryComment then tracks performance baselines per fingerprint, so a regression in that JOIN query is visible as a regression in *that query pattern*, regardless of which user triggered it.
+
+## What query fingerprinting does
+
+Query fingerprinting normalizes SQL statements by replacing all literal parameter values — strings, numbers, lists, timestamps — with a canonical placeholder. Two queries that ask for the same data with different inputs become the same fingerprint and their performance metrics are tracked together.
+
+```sql
+-- These are the same fingerprint:
+SELECT * FROM orders WHERE user_id = 1001 AND status = 'pending';
+SELECT * FROM orders WHERE user_id = 8452 AND status = 'shipped';
+
+-- Fingerprint: SELECT * FROM orders WHERE user_id = ? AND status = ?
+```
+
+The normalization process handles all common SQL patterns:
+
+- Scalar literals: `WHERE id = 42` → `WHERE id = ?`
+- String literals: `WHERE status = 'active'` → `WHERE status = ?`
+- IN lists of any length: `WHERE id IN (1, 2, 3, 4, 5)` → `WHERE id IN (?)`
+- Multi-row inserts: `INSERT INTO t VALUES (1,'a'), (2,'b')` → `INSERT INTO t VALUES (?)`
+- Numeric formatting variants: `1000`, `1000.0`, `1.0e3` all normalize to the same form
+
+The result is a stable identifier for every distinct query *pattern* in your application. As your application evolves and new query shapes appear, QueryComment automatically creates fingerprints for them and begins establishing baselines.
+
+## What QueryComment tracks per fingerprint
+
+For each fingerprint, QueryComment collects the following metrics at sub-minute granularity:
+
+- **p50, p95, and p99 latency** — the distribution of execution times for this specific query pattern. Tracking percentiles rather than averages means that tail latency regressions — the worst 1% or 5% of executions — are visible rather than hidden behind a fast median.
+- **Execution count** — how often this fingerprint executes per measurement window. A sudden increase in execution count can explain a latency regression (the query is running more often and competing for resources) or signal an application behavior change.
+- **Rows examined vs. rows returned ratio** — how many rows the database reads to produce each row in the result set. A rising ratio means the query is doing more work per result, often because an index has degraded, table statistics are stale, or bloat has caused the planner to choose a less efficient path.
+- **Buffer hit rates** — the percentage of data page accesses for this query pattern that are served from the database's buffer cache rather than disk. Per-fingerprint hit rates let you identify which specific queries are driving disk I/O, rather than seeing only an aggregate cache hit ratio.
+- **Temporary table usage** — whether executions of this fingerprint are spilling intermediate results to disk via temporary tables. Temporary table usage typically indicates a missing index on a join column, a large sort operation, or a GROUP BY on a high-cardinality column without supporting index.
+
+## Why sub-minute granularity matters
+
+Many monitoring tools collect query performance metrics in one-minute or even one-hour rollups. Rollups average away the regressions you most need to catch.
+
+Consider a deployment that runs at 2:00 PM and introduces a query plan regression. For the next 12 minutes, a key query runs at 800ms instead of its normal 15ms. At 2:12 PM, a restart brings the old plan back and latency returns to normal. In a one-minute rollup, those 12 data points show elevated average latency — but the spike is spread across the rollup windows and partially obscured by the normal executions happening in the same minute. In an hourly rollup, 12 minutes of regression contributes about 20% weight to a 60-minute average, and the incident effectively disappears.
+
+QueryComment collects and retains raw per-fingerprint metrics at sub-minute resolution. A regression that lasts 10 minutes appears clearly as a regression, not as a slightly elevated hourly average. You can see exactly when it started, how severe it was, and when it resolved — which makes correlating it with a deployment, a configuration change, or an infrastructure event straightforward.
+
+## Query plan change detection
+
+When a query fingerprint shows a sudden latency increase — as opposed to a gradual drift — one of the most common causes is a change in the query execution plan chosen by the planner. QueryComment checks for correlated plan changes in the engine layer when a step-change regression is detected.
+
+Common plan changes that produce latency regressions:
+
+- **Index scan → sequential scan** — the planner decides a sequential scan is cheaper, often because a stale table statistics estimate makes the index seem less selective than it is, or because a new index was dropped during a migration.
+- **Nested loop → hash join** — a change in estimated row counts causes the planner to choose a different join algorithm. The new choice may be worse for your actual data distribution even if it was theoretically correct given the available statistics.
+- **Index selection change** — when multiple indexes could satisfy a query, the planner chooses based on cost estimates. After a data distribution shift or statistics refresh, it may choose a less efficient index.
+
+QueryComment surfaces plan changes as correlated findings alongside the latency regression, including the previous plan, the current plan, and the engine-layer changes (such as a statistics refresh or a new index) that likely triggered the planner to switch. This is particularly valuable for catching deployment-triggered regressions — a schema migration that dropped an index or changed a column type can cause the planner to choose a worse path, and the fingerprint-level regression data makes that visible within the first measurement window after the deployment.
+
+<Tip>
+  If you see a sudden latency regression immediately after a deployment, check the query plan change section of the affected fingerprint's finding. Schema migrations are one of the most common triggers for plan regressions, and the correlation is usually unambiguous when the timing aligns.
+</Tip>
+
+## Sources
+
+QueryComment reads query statistics directly from your database engine's built-in instrumentation. No application-side changes, query proxies, or instrumentation agents are required.
+
+**PostgreSQL — `pg_stat_statements`**
+
+The `pg_stat_statements` extension tracks per-fingerprint statistics across all databases on a PostgreSQL instance. QueryComment reads the following fields:
+
+- `calls` — total execution count since last reset
+- `total_exec_time`, `mean_exec_time`, `stddev_exec_time` — aggregate and per-execution timing
+- `min_exec_time`, `max_exec_time` — latency extremes
+- `rows` — total rows returned across all executions
+- `shared_blks_hit`, `shared_blks_read` — buffer cache hits and disk reads, from which per-fingerprint hit rates are computed
+- `temp_blks_read`, `temp_blks_written` — temporary disk spill volume
+
+QueryComment also reads `pg_stat_statements.queryid` to maintain stable fingerprint identities across statistics resets and PostgreSQL version upgrades where query text normalization may change.
+
+<Note>
+  `pg_stat_statements` must be loaded as a shared preload library in `postgresql.conf`. QueryComment will surface a configuration warning if it is not available. The extension is included with PostgreSQL and enabled by default on most managed PostgreSQL offerings including Amazon RDS, Aurora, Cloud SQL, and Neon.
+</Note>
+
+**MySQL — `performance_schema.events_statements_summary_by_digest`**
+
+MySQL's Performance Schema tracks per-fingerprint statistics in the `events_statements_summary_by_digest` table. QueryComment reads the following fields:
+
+- `COUNT_STAR` — total execution count
+- `SUM_TIMER_WAIT`, `AVG_TIMER_WAIT`, `MAX_TIMER_WAIT` — aggregate and per-execution latency (in picoseconds; converted to milliseconds in QueryComment)
+- `SUM_ROWS_EXAMINED`, `SUM_ROWS_SENT` — rows scanned vs. rows returned, from which the examined/returned ratio is computed
+- `SUM_SORT_ROWS`, `SUM_SORT_MERGE_PASSES` — sort operations and merge passes indicating memory-constrained sorts
+- `SUM_CREATED_TMP_TABLES`, `SUM_CREATED_TMP_DISK_TABLES` — temporary table usage, with disk-based temporary tables flagged separately
+- `SUM_NO_INDEX_USED`, `SUM_NO_GOOD_INDEX_USED` — full scan counts and inefficient index usage, useful for identifying queries that have lost their index coverage
+
+<Note>
+  Performance Schema must be enabled and the `events_statements_summary_by_digest` consumer must be active. On Amazon RDS for MySQL and Aurora MySQL, Performance Schema is enabled by default. On self-managed MySQL, set `performance_schema = ON` in `my.cnf` and verify the statement digest consumer is enabled with `SELECT * FROM performance_schema.setup_consumers WHERE NAME = 'events_statements_summary_by_digest'`.
+</Note>

@@ -1,0 +1,73 @@
+---
+title: "Drift Detection: Catch Database Issues Before They Become Incidents"
+sidebarTitle: "Drift Detection"
+description: "QueryComment uses statistical trend analysis to detect gradual database degradation days before static alert thresholds fire, giving you time to remediate before users are affected."
+---
+
+The most damaging database problems are not the ones that crash your system — those are obvious and fast to fix. The most damaging problems are the slow ones: query latency that drifts up by a millisecond a day, a buffer cache hit rate that erodes a fraction of a percent each week, dead tuple accumulation that quietly grows for two weeks before it causes a visible incident. Static alerting thresholds miss every one of these. QueryComment's drift detection engine is designed specifically for the gradual degradation that static thresholds cannot see.
+
+## The problem with static thresholds
+
+Static threshold alerts work on a simple rule: *if metric X exceeds value Y, fire an alert*. They are easy to configure, easy to understand, and deeply inadequate for database observability.
+
+Consider what static thresholds require you to get right:
+
+- **The threshold must be calibrated correctly for your specific workload.** A p95 latency threshold of 500ms might be catastrophic for one application and irrelevant for another. Most teams set thresholds based on gut feeling or industry averages, not on what is actually normal for their database.
+- **The threshold fires after the problem is already severe.** If your p99 latency is normally 20ms and your threshold is 200ms, you have already lost an order of magnitude of headroom before you are even alerted. Users have been experiencing degraded performance the entire time.
+- **Static thresholds have no memory.** A threshold of 500ms treats a metric that jumped from 8ms to 450ms the same as one that has been stable at 440ms for years. The first is a critical regression; the second is your normal operating state. A static threshold cannot tell the difference.
+- **They ignore seasonality.** A query that normally runs longer on Sunday mornings due to batch jobs will generate false positives every week if your threshold does not account for that pattern.
+
+The result is alert fatigue from false positives during normal traffic spikes, and missed incidents where degradation is real but never crosses the threshold line.
+
+## What drift detection does
+
+QueryComment models each metric against its own historical behavior rather than comparing it to a fixed value. The drift detection engine uses exponentially weighted moving models — statistical models that weight recent observations more heavily than older ones, allowing baselines to adapt as your workload evolves while still being sensitive to genuine anomalies.
+
+Key capabilities of the drift detection engine:
+
+**Slope and acceleration monitoring.** QueryComment does not just track whether a metric is above or below a value — it tracks the rate of change (slope) and whether that rate of change is itself changing (acceleration). A p95 latency that is rising by 1ms per day is concerning even if the absolute value is still low. An acceleration in that slope — the drift is speeding up — is more concerning still.
+
+**Seasonality awareness.** The baseline model accounts for time-of-day and day-of-week patterns in your metrics. A query that normally runs 30% slower during business hours because of higher concurrency will not generate false positive drift alerts during business hours. When that same query runs slow at 3 AM on a Tuesday, that deviation from the seasonal pattern is flagged correctly.
+
+**Per-metric historical comparison.** Every metric QueryComment tracks is compared against its own historical distribution, not against a global standard. A p99 of 80ms is anomalous for a query that normally runs in 12ms, and perfectly normal for a query that has always run in 75ms. The drift engine knows the difference because it maintains per-fingerprint, per-metric baselines.
+
+## Examples of silent degradation drift detects
+
+These are the failure patterns that static thresholds routinely miss and that drift detection is specifically designed to catch:
+
+<CardGroup cols={2}>
+  <Card title="Gradual latency drift" icon="chart-line">
+    A p95 query latency that has been stable at 8ms for three months begins climbing. After five days it reaches 11ms. No static threshold has fired — 11ms is not objectively slow — but QueryComment flags the trend as statistically anomalous relative to the established baseline.
+  </Card>
+  <Card title="1ms/day latency creep" icon="clock">
+    A query adds one millisecond of latency per day due to growing table size and stale planner statistics. Over two weeks, it has gone from 15ms to 29ms. The day-over-day change is invisible; the cumulative drift is not.
+  </Card>
+  <Card title="Buffer cache erosion" icon="database">
+    A buffer cache hit ratio that drops by 0.1% per week due to a table growing past its working-set fit in shared buffers. At 0.1%/week, no static threshold fires for months — but the trend reliably predicts a sharp latency increase when the ratio crosses a critical inflection point.
+  </Card>
+  <Card title="Dead tuple accumulation" icon="trash">
+    Dead tuples accumulate on a high-write table because a long-running transaction is blocking autovacuum. The table bloat grows steadily over days. Query plans begin to use stale statistics. Drift detection flags the rising dead tuple count before plan degradation occurs.
+  </Card>
+</CardGroup>
+
+## How early is early?
+
+The advance warning drift detection provides depends on the rate of degradation, but the contrast with static thresholds is consistent: drift detection fires when a problem is *developing*, not after it has already impacted users.
+
+For typical real-world degradation patterns:
+
+- A latency drift of 1ms/day on a query with a 10ms baseline will be flagged within two to four days, at a point when the query is still running fast enough that users have not noticed anything.
+- Buffer cache hit ratio erosion at 0.1%/week is typically flagged within one to two weeks, well before the hit ratio reaches a level where disk read latency starts affecting query performance meaningfully.
+- Dead tuple accumulation is flagged based on the rate of growth in the `n_dead_tup` metric, usually days before the accumulation is large enough to affect query plans.
+
+In each case, you receive a finding while you still have time to act without urgency. A static threshold on the same metrics would fire — if it fired at all — after users were already impacted and you were in incident response mode.
+
+## Drift detection in practice
+
+QueryComment tracks both absolute values and rates of change for every metric it collects. This means sudden regressions — a p95 that jumps from 8ms to 50ms overnight — are also caught, because a step change is a rate of change signal with a very steep slope.
+
+Where drift detection specifically excels is in the gradual patterns that look like noise when you inspect any individual data point but are clearly anomalous when viewed against the metric's own history. The engine surfaces these as findings with the same structure as any other QueryComment finding: the affected metric, the measured drift rate, the statistical confidence, and the correlated signals from other layers that help explain the cause.
+
+<Note>
+  Drift detection requires a baseline period of approximately 24 hours before it can flag anomalies for a given metric. During the baseline period, QueryComment collects observations and fits the initial statistical model. Metrics for newly added databases or query fingerprints that appear for the first time will begin generating drift alerts after this window has elapsed.
+</Note>

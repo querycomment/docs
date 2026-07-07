@@ -1,47 +1,97 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Connect Your First Database to QueryComment"
+sidebarTitle: "Quickstart"
+description: "Connect your PostgreSQL or MySQL database to QueryComment in under five minutes and start detecting query regressions automatically."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
+This guide walks you through connecting your first PostgreSQL or MySQL database to QueryComment. By the end, the QueryComment agent will be running alongside your database, reading from stats views, and building latency baselines for every query fingerprint it observes. No code changes are required, and the agent never modifies your database.
 
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+<Note>
+  The QueryComment agent connects with read-only access only. It reads from `pg_stat_statements` (PostgreSQL) or `performance_schema` (MySQL) and never issues writes, DDL, or queries against your application data.
+</Note>
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+  <Step title="Request Early Access">
+    QueryComment is currently in early access. Visit [querycomment.com](https://querycomment.com) to sign up. Once your account is approved, you'll receive an API key from your dashboard — you'll need it in the next step.
+  </Step>
+
+  <Step title="Deploy the Agent">
+    The QueryComment agent is a single binary or container sidecar. It requires network access to your database and outbound HTTPS to the QueryComment API. No inbound ports need to be opened.
+
+    **Option A — Docker (recommended for most setups)**
+
+    Run the agent as a container, passing your database URL and API key as flags:
 
     ```bash
-    npm install your-package
+    docker run --rm querycomment/agent:latest \
+      --db-url "postgres://user:pass@host:5432/dbname" \
+      --api-key "YOUR_API_KEY"
+    ```
+
+    For MySQL, use a MySQL connection string:
+
+    ```bash
+    docker run --rm querycomment/agent:latest \
+      --db-url "mysql://user:pass@host:3306/dbname" \
+      --api-key "YOUR_API_KEY"
+    ```
+
+    **Option B — Standalone binary**
+
+    Download the binary for your platform from the QueryComment dashboard and run it directly:
+
+    ```bash
+    ./querycomment-agent \
+      --db-url "postgres://user:pass@host:5432/dbname" \
+      --api-key "YOUR_API_KEY"
     ```
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
 
-    ```bash
-    your-cli init
+  <Step title="Grant Read-Only Access">
+    Create a dedicated monitoring user with the minimum permissions the agent needs. Do not reuse your application user credentials.
+
+    **PostgreSQL**
+
+    ```sql
+    CREATE USER querycomment WITH PASSWORD 'your-password';
+    GRANT pg_monitor TO querycomment;
+    GRANT SELECT ON ALL TABLES IN SCHEMA pg_catalog TO querycomment;
     ```
+
+    The `pg_monitor` role (available in PostgreSQL 10+) gives the agent access to `pg_stat_statements`, `pg_stat_activity`, `pg_stat_replication`, and related stats views.
+
+    **MySQL**
+
+    ```sql
+    CREATE USER 'querycomment'@'%' IDENTIFIED BY 'your-password';
+    GRANT SELECT, PROCESS, REPLICATION CLIENT ON *.* TO 'querycomment'@'%';
+    ```
+
+    The `PROCESS` privilege allows the agent to read `performance_schema` and `SHOW PROCESSLIST`. `REPLICATION CLIENT` enables replication state monitoring.
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
 
-    ```bash
-    your-cli start
-    ```
+  <Step title="Verify the Connection">
+    After starting the agent, open the QueryComment dashboard. Within 60 seconds the database connection status will change to **Connected** and you'll see the agent version and last heartbeat time.
+
+    If the status doesn't update within two minutes, check:
+    - The database host is reachable from wherever the agent is running
+    - The monitoring user credentials are correct
+    - The agent has outbound HTTPS access to `api.querycomment.com`
+
+    The agent will log connection errors to stdout — run with `--log-level debug` for verbose output.
+  </Step>
+
+  <Step title="Explore Your First Insights">
+    The agent begins collecting data immediately. Here's what to expect over time:
+
+    - **Within 15 minutes** — the Query Performance view in your dashboard will show latency percentiles (p50/p95/p99) and execution counts for every fingerprinted query.
+    - **Within 1 hour** — buffer hit rates, rows examined/returned ratios, and engine-layer metrics (autovacuum activity, lock contention, buffer pool utilization) will populate.
+    - **After 24 hours** — drift detection has enough baseline history to flag latency regressions with statistical confidence. This is when QueryComment's early-warning capabilities come fully online.
+
+    Start by reviewing the **Top Queries** view, sorted by p95 latency. These are your highest-leverage optimization targets.
   </Step>
 </Steps>
 
 <Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
-
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
+  For database-specific setup instructions — including Supabase, Neon, Amazon Aurora, PlanetScale, AWS RDS MySQL, and Google Cloud SQL — see the platform guides in the sidebar. Managed platforms sometimes require additional steps to enable `pg_stat_statements` or grant monitoring permissions.
 </Tip>

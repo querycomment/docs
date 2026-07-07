@@ -1,0 +1,114 @@
+---
+title: "Cross-Layer Correlation: From Symptoms to Root Causes"
+sidebarTitle: "Correlation Engine"
+description: "QueryComment's reasoning engine links query regressions to engine-level and infrastructure-level changes to produce causal chains you can act on immediately."
+---
+
+Collecting metrics across three layers of your database stack produces a lot of data. The value is not in the data itself — it is in the connections between signals that would otherwise sit in separate dashboards with no relationship to each other. When your p95 latency rises, QueryComment does not just tell you that a query is slow. It searches the engine and infrastructure layers for changes that are temporally and causally related to the regression, builds a directed graph of cause and effect, and surfaces a single finding that tells you what happened, why, and what to do about it.
+
+## How the reasoning engine works
+
+When QueryComment detects a query regression — whether a sudden spike or a gradual drift — the causal reasoning engine begins searching for correlated changes at the other two layers. The process follows a structured sequence:
+
+<Steps>
+  <Step title="Regression detection">
+    A query fingerprint's latency percentiles, execution counts, or resource metrics deviate from their established baseline. This is the starting signal — the symptom that initiates root-cause analysis.
+  </Step>
+  <Step title="Temporal correlation search">
+    The engine searches the engine and infrastructure metric timelines for changes that began at or before the query regression. Changes that are temporally correlated with the regression are candidates for causal relationships.
+  </Step>
+  <Step title="Causal graph construction">
+    Temporally correlated changes are organized into a directed graph. Nodes are metrics or states (a rising dead tuple count, a declining buffer hit rate, an autovacuum that stopped running). Edges represent hypothesized causal relationships based on known database internals.
+  </Step>
+  <Step title="Statistical validation">
+    The engine uses statistical methods to distinguish genuine causal relationships from coincidence. A query slowing at the same time as a CPU spike is noted, but only marked as causal if the query's CPU time attribution matches the spike — if the CPU is being consumed by something unrelated to the slow query, the correlation is not promoted to a cause.
+  </Step>
+  <Step title="Finding generation">
+    The validated causal chain is surfaced as a single finding with the full causal path, the evidence at each node, and the recommended remediation action.
+  </Step>
+</Steps>
+
+This approach means QueryComment avoids the two failure modes that plague simpler correlation systems: false positives from coincidental correlations, and missed causes because the evidence spans layers that are never compared.
+
+## A complete causal chain example
+
+The following example shows how cross-layer correlation works for a real-world scenario: a SaaS application running on PostgreSQL with an AWS gp3 EBS volume.
+
+**The presenting symptom:** Your application is experiencing intermittent slowness on the product listing page. Traditional monitoring shows nothing — CPU is at 40%, average query latency looks fine, no alerts have fired.
+
+Here is what QueryComment finds when it correlates all three layers:
+
+**Query layer — drift detection fires first.**
+The p95 latency of the `orders`/`products` JOIN query — the fingerprint `SELECT … FROM orders JOIN products ON … WHERE user_id = ?` — has drifted from 12ms to 28ms over the past eight days. No static threshold was breached; the drift engine flagged the trend as statistically anomalous on day five.
+
+**Engine layer — the root cause emerges.**
+Correlated with the latency drift:
+- The `orders` table has accumulated 2.4 million dead tuples.
+- Autovacuum has not run on `orders` in nine days.
+- A long-running analytics query has been open in a transaction for ten days, preventing autovacuum from advancing the vacuum horizon past the rows that transaction might still read.
+- The query planner's row count estimates for `orders` are now based on stale statistics that undercount live rows, causing suboptimal join order selection.
+
+**Infrastructure layer — the downstream effect is measured.**
+Correlated with the engine-layer findings:
+- The buffer cache hit ratio for `orders` table pages has declined from 99.7% to 97.1%.
+- The 2.6 percentage-point drop in hit ratio means disk reads are now required for approximately 1 in 38 page accesses that previously hit cache.
+- Those additional disk reads are consuming 60% of the database instance's IOPS baseline, reducing headroom for concurrent queries.
+
+**The causal chain QueryComment surfaces:**
+
+```
+idle transaction (10 days old)
+  → vacuum horizon blocked
+    → dead tuple accumulation on `orders` (2.4M dead tuples)
+      → stale planner statistics
+        → suboptimal query plan (join order regression)
+      → table bloat increases working set size
+        → buffer cache hit ratio decline (99.7% → 97.1%)
+          → increased disk reads (60% of IOPS baseline)
+            → p95 latency regression (12ms → 28ms over 8 days)
+```
+
+**The single actionable finding:** Terminate the idle transaction (session ID surfaced in the finding). Once the blocking transaction is gone, autovacuum will run on `orders` within minutes, reclaim the dead tuples, refresh planner statistics, and allow the buffer cache to stabilize. No schema changes, no index rebuilds, no query rewrites required.
+
+<Info>
+  Without cross-layer correlation, this investigation would require manually comparing a query performance chart, a table statistics dashboard, an autovacuum log, and an I/O metrics panel — and knowing which of the hundreds of signals on each dashboard to connect to the others. QueryComment performs that analysis automatically and continuously.
+</Info>
+
+## What correlation is not
+
+Cross-layer correlation in QueryComment is not a rules engine or a heuristic system. It does not fire findings based on fixed patterns like "if autovacuum hasn't run in N days, alert." That approach generates too many false positives and misses causal chains that do not fit predefined templates.
+
+QueryComment uses statistical methods to validate each hypothesized causal link before including it in a finding. A metric change that is temporally correlated with a query regression but not statistically attributable to it will not appear in the causal chain. This means:
+
+- You do not receive findings about infrastructure events that happened to coincide with a query regression but had no causal relationship.
+- You do not receive findings about engine-layer activity that is normal for your workload and not actually affecting query performance.
+- Each finding in QueryComment represents a causal relationship that the statistical evidence supports, not just a pattern match.
+
+<Warning>
+  Cross-layer correlation works best when QueryComment has been monitoring your database long enough to have established baselines at all three layers. For very new databases or during significant workload transitions (such as a large data migration), the confidence of causal findings may be lower until baselines stabilize.
+</Warning>
+
+## How this speeds up incident response
+
+The difference between traditional monitoring and QueryComment's causal correlation is most visible during active incidents, where time spent diagnosing is time users spend experiencing degraded service.
+
+**Traditional monitoring approach:**
+1. Alert fires on p95 latency (or you notice it manually).
+2. Open query performance dashboard — query is slow, no obvious cause.
+3. Open infrastructure dashboard — CPU and I/O metrics look elevated, unclear if related.
+4. Open database internals dashboard — check autovacuum, check locks, check replication.
+5. Search logs for the slow query's execution plan.
+6. Attempt to correlate timestamps manually across four separate tools.
+7. Form a hypothesis, test it, iterate.
+
+In a moderate-complexity incident, this process takes 30 to 90 minutes — if you know where to look and have the institutional knowledge to connect the signals.
+
+**QueryComment approach:**
+1. QueryComment surfaces a finding: causal chain from idle transaction to query regression, with evidence at each layer and a single recommended action.
+2. You verify the finding and act on it.
+
+The investigation that would take a senior database engineer 30 minutes to piece together manually is available immediately, for every regression, at every hour of the day.
+
+<Tip>
+  See [Three-Layer Observability](/concepts/three-layer-observability) for a detailed description of what QueryComment collects at each layer, and [Drift Detection](/concepts/drift-detection) to understand how gradual regressions are detected before they breach static thresholds.
+</Tip>

@@ -1,0 +1,148 @@
+---
+title: "Google Cloud SQL Monitoring and Observability"
+sidebarTitle: "Cloud SQL"
+description: "Deeper observability for Cloud SQL PostgreSQL and MySQL — correlate query performance with GCP infrastructure events beyond what Cloud SQL Insights surfaces."
+---
+
+Google Cloud SQL Insights gives you query-level visibility with execution plans and wait events — a solid foundation. What it can't do is connect the query layer to what's happening beneath it: a storage autoscaling event causing an I/O spike, a maintenance reboot leaving your buffer pool cold, or a shared-core instance exhausting its CPU burst credits. QueryComment adds that infrastructure correlation layer on top of the query visibility you already have, so when latency climbs you can tell immediately whether the cause is in your SQL or in the platform.
+
+## Beyond Cloud SQL Insights
+
+Cloud SQL Insights covers the query layer well. It shows you top queries by execution time, wait event breakdowns, and sample execution plans. The gap is everything below the query layer:
+
+- Insights doesn't know that your `db-f1-micro` instance just exhausted its CPU burst credits and throttled
+- It doesn't correlate a latency spike with the storage autoscaling event that fired two minutes before
+- It doesn't track how your buffer pool is recovering after a maintenance window reboot
+- It doesn't measure the network latency between your Cloud SQL instance and the Cloud Run or GKE workloads calling it
+
+QueryComment reads from the same database statistics sources as Insights — `pg_stat_statements` for PostgreSQL, `performance_schema` for MySQL — and adds the GCP infrastructure signals on top, giving you both layers in a single correlated view.
+
+## Cloud SQL PostgreSQL Monitoring
+
+For Cloud SQL PostgreSQL, QueryComment integrates with `pg_stat_statements`, `pg_stat_activity`, `pg_stat_user_tables`, and `pg_stat_bgwriter` to build a complete picture of query and engine behavior.
+
+Beyond what Cloud SQL Insights surfaces, QueryComment tracks:
+
+- **Per-query execution plan history** with plan change detection. When a query switches plans — due to table growth, a new index, or a statistics update — QueryComment marks the change and preserves the before/after comparison.
+- **Autovacuum activity** and its effect on table access patterns. Autovacuum is necessary but can compete with application queries for I/O. QueryComment shows you when autovacuum is running on which tables and correlates it with any latency impact.
+- **Buffer pool internals** — shared buffer hit ratio, block read rate, and eviction patterns. When a maintenance reboot or failover leaves the cache cold, QueryComment tracks the warmup and distinguishes expected post-restart behavior from genuine regressions.
+- **Checkpoint pressure** — bgwriter statistics correlated with write latency, showing when checkpoint activity is competing with query I/O.
+- **Lock and blocking query detection** — when a long-running transaction blocks other queries, QueryComment identifies the blocker and the chain of blocked queries.
+
+```sql
+-- QueryComment uses these views — confirm they're accessible with your monitoring user
+SELECT COUNT(*) FROM pg_stat_statements;
+SELECT COUNT(*) FROM pg_stat_activity;
+SELECT COUNT(*) FROM pg_stat_user_tables;
+```
+
+## Cloud SQL MySQL Monitoring
+
+For Cloud SQL MySQL, QueryComment connects through `performance_schema` and `information_schema`, providing the same depth of per-query and InnoDB internal visibility it delivers for other MySQL-compatible databases.
+
+Key capabilities for Cloud SQL MySQL:
+
+- **Per-query execution plans over time** using `performance_schema` statement history
+- **InnoDB buffer pool metrics** — hit ratio, dirty page ratio, eviction rate, and adaptive hash index efficiency
+- **Mutex and lock wait tracking** at the individual query level
+- **Slow query correlation** with InnoDB I/O patterns — distinguishing queries that are slow because they examine too many rows from queries that are slow because they're waiting for disk reads
+
+<Info>
+  Cloud SQL MySQL instances have `performance_schema` enabled by default. If you're running a legacy instance where it was disabled, you'll need to enable it via the database flags configuration in the Cloud SQL console — note that this requires an instance restart.
+</Info>
+
+## GCP Infrastructure Correlation
+
+Cloud SQL runs on GCP infrastructure, and several platform-level events regularly affect query performance. QueryComment monitors for these events and marks them on your query latency timeline.
+
+<CardGroup cols={2}>
+  <Card title="Storage Autoscaling Events" icon="hard-drive">
+    Cloud SQL can automatically increase storage capacity when your disk approaches its limit. During the expansion, the storage subsystem performs background I/O that competes with query reads and writes. QueryComment detects these events and marks them so you don't mistake autoscaling I/O for a query regression.
+  </Card>
+  <Card title="Maintenance Window Reboots" icon="rotate">
+    Cloud SQL applies updates during your configured maintenance window, which requires a database restart. Your buffer pool starts cold after every restart. QueryComment baselines your normal warmup curve and tracks recovery after each maintenance event.
+  </Card>
+  <Card title="CPU Burst Credit Exhaustion" icon="microchip">
+    Shared-core instance types (db-f1-micro, db-g1-small) run on burstable CPU. When burst credits are exhausted, the instance is throttled to its baseline CPU allocation — often a fraction of what it was using. QueryComment monitors burst credit consumption and alerts before exhaustion causes latency to spike.
+  </Card>
+  <Card title="Network Latency Monitoring" icon="network-wired">
+    Queries from Cloud Run, GKE, or Compute Engine to Cloud SQL travel over Private Service Connect. QueryComment tracks round-trip latency between your application tier and the database, separating network overhead from actual query execution time.
+  </Card>
+</CardGroup>
+
+<Warning>
+  If you're running production workloads on a shared-core Cloud SQL instance (db-f1-micro or db-g1-small), CPU burst credit exhaustion is a common cause of unexplained latency spikes during business hours. QueryComment's burst credit tracking will make this visible; if it's a recurring problem, upgrading to a dedicated-core instance class will eliminate it.
+</Warning>
+
+## Setup
+
+<Steps>
+  <Step title="Enable Required Database Flags">
+    **For Cloud SQL PostgreSQL**, enable `pg_stat_statements` by adding it to the `cloudsql.enable_pgaudit` or `shared_preload_libraries` flag in the Cloud SQL console, then run:
+
+    ```sql
+    CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+    ```
+
+    **For Cloud SQL MySQL**, confirm `performance_schema` is enabled:
+
+    ```sql
+    SHOW VARIABLES LIKE 'performance_schema';
+    -- Should return: performance_schema | ON
+    ```
+
+    <Info>
+      Changes to database flags in Cloud SQL require an instance restart. Schedule this during a low-traffic window if `performance_schema` or `pg_stat_statements` isn't already enabled.
+    </Info>
+  </Step>
+
+  <Step title="Create a Monitoring User">
+    **Cloud SQL PostgreSQL:**
+    ```sql
+    CREATE ROLE querycomment_monitor WITH LOGIN PASSWORD 'choose-a-strong-password';
+    GRANT pg_monitor TO querycomment_monitor;
+    GRANT SELECT ON ALL TABLES IN SCHEMA pg_catalog TO querycomment_monitor;
+    GRANT EXECUTE ON FUNCTION pg_stat_statements_reset() TO querycomment_monitor;
+    ```
+
+    **Cloud SQL MySQL:**
+    ```sql
+    CREATE USER 'querycomment_monitor'@'%' IDENTIFIED BY 'choose-a-strong-password';
+    GRANT SELECT, PROCESS, REPLICATION CLIENT ON *.* TO 'querycomment_monitor'@'%';
+    GRANT SELECT ON performance_schema.* TO 'querycomment_monitor'@'%';
+    GRANT SELECT ON information_schema.* TO 'querycomment_monitor'@'%';
+    ```
+  </Step>
+
+  <Step title="Configure Authorized Networks or Private IP">
+    QueryComment can connect to Cloud SQL via the **Public IP with Authorized Networks** or **Private IP** (recommended for production).
+
+    For Private IP, ensure the QueryComment agent runs in a VPC that has access to Cloud SQL's private IP address. For Public IP, add the agent's external IP to the **Authorized Networks** list in the Cloud SQL console under **Connections**.
+
+    <Tip>
+      For Cloud Run or GKE deployments of the QueryComment agent, use Private Service Connect with a VPC connector to avoid exposing your Cloud SQL instance to the public internet.
+    </Tip>
+  </Step>
+
+  <Step title="Deploy the Agent">
+    **Cloud SQL PostgreSQL:**
+    ```bash
+    docker run --rm \
+      -e QC_DATABASE_URL="postgresql://querycomment_monitor:password@[CLOUD_SQL_IP]:5432/[dbname]" \
+      querycomment/agent:latest
+    ```
+
+    **Cloud SQL MySQL:**
+    ```bash
+    docker run --rm \
+      -e QC_DATABASE_URL="mysql://querycomment_monitor:password@[CLOUD_SQL_IP]:3306/[dbname]" \
+      querycomment/agent:latest
+    ```
+
+    Replace `[CLOUD_SQL_IP]` with your instance's private or public IP address. Using the Cloud SQL Auth Proxy is also supported — replace the IP with `127.0.0.1` if you're running the proxy as a sidecar.
+  </Step>
+
+  <Step title="Verify Infrastructure Signal Collection">
+    In the QueryComment dashboard, navigate to your Cloud SQL instance view and open the **Infrastructure** tab. Confirm that GCP-specific signals are populating — storage utilization, CPU burst credits (for shared-core instances), and maintenance event history. If you're on a dedicated-core instance, the burst credit panel will be hidden automatically.
+  </Step>
+</Steps>

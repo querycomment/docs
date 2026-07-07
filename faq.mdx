@@ -1,0 +1,68 @@
+---
+title: "Frequently Asked Questions about QueryComment"
+sidebarTitle: "FAQ"
+description: "Answers to common questions about QueryComment's database observability approach, supported databases, setup requirements, and pricing."
+---
+
+QueryComment is a database observability platform for PostgreSQL and MySQL. This page answers common questions about how it works, what it monitors, and how to get started.
+
+<AccordionGroup>
+  <Accordion title="What is database observability?">
+    Observability means being able to understand the internal state of your database systems by analyzing query performance, engine metrics, and infrastructure signals. Unlike basic monitoring — which checks metrics against static thresholds and alerts when something crosses a line — observability helps you understand *why* problems occur.
+
+    QueryComment collects data from three layers — query, engine, and infrastructure — and correlates anomalies across all of them to explain causality, not just report symptoms.
+  </Accordion>
+
+  <Accordion title="How is QueryComment different from Datadog?">
+    Datadog offers broad infrastructure monitoring with database support as one feature among many. QueryComment is purpose-built for database observability. The key difference is cross-layer causal correlation: when a query regresses, QueryComment connects it to the engine-level issue (autovacuum delay, buffer pool miss) and infrastructure event (disk I/O spike, memory pressure) that caused it.
+
+    Datadog shows you that your database is slow. QueryComment shows you why.
+  </Accordion>
+
+  <Accordion title="Which databases does QueryComment support?">
+    QueryComment supports **PostgreSQL** and **MySQL**, including the following managed platforms:
+
+    - Supabase
+    - Neon
+    - Amazon Aurora (PostgreSQL and MySQL)
+    - PlanetScale
+    - AWS RDS MySQL
+    - Google Cloud SQL (PostgreSQL and MySQL)
+  </Accordion>
+
+  <Accordion title="How do I install QueryComment? Do I need to change my application code?">
+    No application code changes are required. You deploy a lightweight agent as a container sidecar or standalone binary. The agent connects to your database with a read-only user and reads from existing statistics views — `pg_stat_statements` for PostgreSQL and `performance_schema` for MySQL.
+
+    Setup takes under five minutes.
+  </Accordion>
+
+  <Accordion title="Does QueryComment have read-only access to my database?">
+    Yes. The agent connects with a read-only monitoring user and only reads from statistics views. It never modifies your database, never proxies queries, and never accesses row data — only aggregated performance metrics.
+  </Accordion>
+
+  <Accordion title="What is silent degradation?">
+    Silent degradation is when database performance gradually worsens without triggering any alert threshold. Examples include a query getting 3ms slower per day, an index slowly bloating, or a buffer cache hit ratio dropping 0.1% daily. By the time a static alert fires, users have been affected for days or weeks.
+
+    QueryComment's drift detection catches these trends proactively — typically giving you days or weeks of advance warning before a threshold-based alert would ever fire.
+  </Accordion>
+
+  <Accordion title="How does cross-layer correlation work?">
+    QueryComment collects metrics from three layers — query performance, database engine internals, and infrastructure (CPU, memory, I/O, network). When a query regression is detected, the reasoning engine searches for temporally correlated changes at the other layers and builds a directed causal chain.
+
+    For example: *"This query got slow because autovacuum was delayed by a long-running transaction, which caused table bloat, which forced sequential scans."*
+
+    Each link in the chain is supported by data, not heuristics.
+  </Accordion>
+
+  <Accordion title="How long does it take to see results after connecting?">
+    Query latency baselines appear within **15 minutes** of connecting the agent. Drift detection requires approximately **24 hours** of baseline data before it can flag anomalies. Cross-layer correlation is available from the moment your first baseline is established.
+  </Accordion>
+
+  <Accordion title="Is QueryComment free?">
+    QueryComment is currently in early access. Sign up at [querycomment.com](https://querycomment.com) to get free early access.
+  </Accordion>
+
+  <Accordion title="Does QueryComment work with Aurora, RDS, or Cloud SQL?">
+    Yes. QueryComment supports all major managed PostgreSQL and MySQL platforms. Each has dedicated integration guides covering platform-specific capabilities — for example, Aurora storage I/O correlation, Neon cold start labeling, or PlanetScale VTGate monitoring.
+  </Accordion>
+</AccordionGroup>

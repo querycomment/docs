@@ -1,0 +1,166 @@
+---
+title: "Troubleshoot Your QueryComment Setup"
+sidebarTitle: "Troubleshooting"
+description: "Diagnose and fix common issues with QueryComment agent connections, missing metrics, and dashboard data gaps for PostgreSQL and MySQL."
+---
+
+This page covers common setup and runtime issues you may encounter with QueryComment, and how to resolve them.
+
+## Agent connection issues
+
+<AccordionGroup>
+  <Accordion title="Agent shows 'Connection refused'">
+    This usually means the agent cannot reach your database host. Check the following:
+
+    - Confirm the database host is network-reachable from wherever the agent is running.
+    - Verify the correct port is open: **5432** for PostgreSQL, **3306** for MySQL.
+    - Double-check the connection string for typos in the host, port, or database name.
+
+    <Warning>
+      For managed platforms, make sure you're using the **direct connection string**, not a connection pooler URL. Connection poolers sit in front of PostgreSQL and prevent the agent from accessing `pg_stat_statements` directly.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="Authentication failed">
+    Verify the monitoring user credentials in your connection string. Then confirm the user has the correct permissions for your database engine:
+
+    **PostgreSQL** — the monitoring user must have the `pg_monitor` role:
+
+    ```sql
+    GRANT pg_monitor TO querycomment;
+    ```
+
+    **MySQL** — the monitoring user needs `SELECT`, `PROCESS`, and `REPLICATION CLIENT` grants. Run the following to verify what's currently granted:
+
+    ```sql
+    SHOW GRANTS FOR 'querycomment'@'%';
+    ```
+  </Accordion>
+
+  <Accordion title="SSL/TLS errors">
+    If your database requires SSL, add the appropriate parameter to your connection string:
+
+    - **PostgreSQL:** append `?sslmode=require`
+    - **MySQL:** append `?tls=true`
+
+    <Note>
+      For managed platforms such as Supabase, Amazon Aurora, and Google Cloud SQL, SSL is typically required and enforced by default.
+    </Note>
+  </Accordion>
+</AccordionGroup>
+
+## Missing or incomplete metrics
+
+<AccordionGroup>
+  <Accordion title="No query data appearing">
+    **PostgreSQL** — verify that `pg_stat_statements` is installed and active:
+
+    ```sql
+    SELECT * FROM pg_extension WHERE extname = 'pg_stat_statements';
+    ```
+
+    If the extension is not present, add it to your PostgreSQL configuration and restart:
+
+    ```bash
+    # In postgresql.conf
+    shared_preload_libraries = 'pg_stat_statements'
+    ```
+
+    Then create the extension:
+
+    ```sql
+    CREATE EXTENSION pg_stat_statements;
+    ```
+
+    **MySQL** — verify that `performance_schema` is enabled:
+
+    ```sql
+    SHOW VARIABLES LIKE 'performance_schema';
+    ```
+
+    If the value is `OFF`, enable it in your MySQL configuration and restart the server.
+  </Accordion>
+
+  <Accordion title="Query baselines not showing after 15 minutes">
+    Query baselines typically appear within 15 minutes. If they haven't after that window:
+
+    1. Check the agent logs to confirm it is running and successfully connected.
+    2. Verify the monitoring user has `SELECT` on `pg_stat_statements` (PostgreSQL) or access to the relevant `performance_schema` tables (MySQL).
+
+    <Note>
+      Some managed platforms require additional permission grants beyond the default monitoring role. Check the integration guide for your specific platform.
+    </Note>
+  </Accordion>
+
+  <Accordion title="Drift detection not flagging anything">
+    Drift detection requires approximately **24 hours** of baseline data before it can identify anomalies. If the agent has been connected for less than 24 hours, this is expected behavior.
+
+    After 24 hours, if drift detection still isn't producing results, verify that the agent has been collecting data consistently with no gaps or restarts during the baseline window.
+  </Accordion>
+
+  <Accordion title="Missing engine metrics">
+    Engine metrics require elevated read access to internal statistics views.
+
+    - **PostgreSQL** — the monitoring user needs the `pg_monitor` role to read views such as `pg_stat_bgwriter`, `pg_stat_replication`, and WAL statistics.
+    - **MySQL** — the `PROCESS` privilege is required to access `INFORMATION_SCHEMA` tables and engine status outputs.
+
+    Confirm the correct grants are in place by running `SHOW GRANTS` for the monitoring user.
+  </Accordion>
+</AccordionGroup>
+
+## Platform-specific issues
+
+<AccordionGroup>
+  <Accordion title="Supabase: agent can't connect">
+    Use the **direct connection string** from your Supabase dashboard, not the pooler URL.
+
+    To find it: go to **Settings → Database → Connection string → URI**. The direct string connects straight to PostgreSQL, which the agent requires for `pg_stat_statements` access.
+
+    <Warning>
+      The Supabase connection pooler (PgBouncer) sits in front of PostgreSQL and blocks access to `pg_stat_statements`. Always use the direct connection string with QueryComment.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="Neon: metrics showing cold-start spikes">
+    Cold-start latency spikes on Neon are expected — compute endpoints spin down during inactivity and have a startup cost on the first connection after a cold period. QueryComment labels these cold-start events separately so they don't appear as query regressions.
+
+    <Note>
+      If cold-start events are being labeled as regressions rather than cold starts, contact support. The compute endpoint state detection may need calibration for your environment.
+    </Note>
+  </Accordion>
+
+  <Accordion title="Aurora: no replication metrics">
+    Replication metrics require the monitoring user to have access to the relevant replication views and commands:
+
+    - **PostgreSQL on Aurora** — grant access to `pg_stat_replication`:
+      ```sql
+      GRANT pg_monitor TO querycomment;
+      ```
+    - **MySQL on Aurora** — the monitoring user needs `REPLICATION CLIENT` to run `SHOW REPLICA STATUS`.
+
+    Aurora may also require additional IAM permissions if you are using the enhanced monitoring integration. Check your Aurora parameter group and IAM role configuration if replication metrics are still absent after granting the above.
+  </Accordion>
+
+  <Accordion title="PlanetScale: VTGate metrics not appearing">
+    VTGate metrics require the QueryComment agent to be deployed within the same network as your PlanetScale VTGate endpoint. Verify that:
+
+    - The agent can reach the VTGate host and port from its deployment environment.
+    - No firewall rules or security group policies are blocking the connection.
+
+    If you're running the agent outside the VTGate network boundary, move it to a deployment environment with direct network access to the endpoint.
+  </Accordion>
+</AccordionGroup>
+
+## Getting more help
+
+<Note>
+  For issues not covered on this page, reach the QueryComment team through the early access portal or by emailing support. Include your agent version and a description of the issue so the team can assist you quickly.
+</Note>
+
+You can also retrieve detailed diagnostic output from the agent binary by starting it with the `--log-level debug` flag:
+
+```bash
+./querycomment-agent --log-level debug
+```
+
+Debug logs include connection attempts, query collection cycles, and any errors returned by your database — useful for diagnosing permission issues or unexpected gaps in metric collection.
