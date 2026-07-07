@@ -1,7 +1,7 @@
 ---
 title: "Query Fingerprinting: Track Every Query Pattern Over Time"
 sidebarTitle: "Query Fingerprinting"
-description: "QueryComment normalizes SQL statements into fingerprints to group identical query patterns regardless of parameters, enabling per-query baseline tracking and regression detection."
+description: "QueryComment normalizes SQL into fingerprints and tracks latency, cache hit rates, and execution counts per pattern to surface regressions quickly."
 ---
 
 Your application runs thousands of queries per minute, and nearly every one of them has different parameter values. A product listing page might execute the same JOIN query tens of thousands of times per hour with a different `user_id` each time. Without normalization, those are tens of thousands of distinct queries — impossible to track, impossible to baseline, impossible to detect regressions in. Query fingerprinting solves this by stripping parameter values from SQL statements and grouping structurally identical queries under a single fingerprint. QueryComment then tracks performance baselines per fingerprint, so a regression in that JOIN query is visible as a regression in *that query pattern*, regardless of which user triggered it.

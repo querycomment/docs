@@ -1,7 +1,7 @@
 ---
-title: "Monitor Your Supabase Database with QueryComment"
+title: "Monitor Supabase Database Performance with QueryComment"
 sidebarTitle: "Supabase"
-description: "Deep PostgreSQL observability for Supabase — track RLS policy overhead, PgBouncer connection pooling, realtime subscriptions, and Edge Function query patterns."
+description: "Deep PostgreSQL observability for Supabase: track RLS policy overhead, Edge Function N+1 patterns, realtime subscriptions, and PostgREST regressions."
 ---
 
 QueryComment gives your Supabase project the database observability layer that Supabase's built-in dashboard doesn't provide. By connecting directly to the underlying PostgreSQL instance, QueryComment surfaces RLS policy costs, Edge Function N+1 patterns, realtime subscription load, and PostgREST query regressions — everything you need to keep production running fast as your application scales.
@@ -70,7 +70,6 @@ The agent runs as a read-only role with no ability to modify your schema, data, 
 
     -- Grant read access to statistics views
     GRANT pg_monitor TO querycomment_monitor;
-    GRANT EXECUTE ON FUNCTION pg_stat_statements_reset() TO querycomment_monitor;
 
     -- Allow reading table statistics
     GRANT SELECT ON ALL TABLES IN SCHEMA pg_catalog TO querycomment_monitor;

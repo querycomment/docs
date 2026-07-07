@@ -1,7 +1,7 @@
 ---
 title: "PostgreSQL Monitoring and Observability with QueryComment"
 sidebarTitle: "PostgreSQL"
-description: "Connect QueryComment to your PostgreSQL database for three-layer observability that correlates query regressions, engine internals, and infrastructure metrics."
+description: "Monitor PostgreSQL with QueryComment to correlate query regressions, engine internals, and infrastructure metrics across all three observability layers."
 ---
 
 QueryComment goes beyond measuring query latency in isolation. When a query slows down, the latency number tells you something went wrong — but Postgres engine internals tell you *why*: a planner switch to a sequential scan after autovacuum fell behind, a lock wait stacking up behind a long-running transaction, or a buffer cache working set that no longer fits in `shared_buffers` after a backfill. QueryComment connects all three layers — query behavior, engine state, and infrastructure signals — so you can move from "something is slow" to "here is exactly what changed and why" without manually joining statistics views or waiting for an alert to fire.
@@ -117,7 +117,7 @@ Infrastructure metrics are correlated with database signals automatically. A dis
 
     ```bash
     querycomment-agent \
-      --dsn "postgres://querycomment:your-password@your-host:5432/your-database" \
+      --db-url "postgres://querycomment:your-password@your-host:5432/your-database" \
       --api-key "your-api-key"
     ```
 

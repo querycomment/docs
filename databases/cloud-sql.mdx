@@ -1,7 +1,7 @@
 ---
-title: "Google Cloud SQL Monitoring and Observability"
+title: "Google Cloud SQL Database Monitoring with QueryComment"
 sidebarTitle: "Cloud SQL"
-description: "Deeper observability for Cloud SQL PostgreSQL and MySQL — correlate query performance with GCP infrastructure events beyond what Cloud SQL Insights surfaces."
+description: "Deeper observability for Cloud SQL PostgreSQL and MySQL — correlate query performance with GCP infrastructure events that Cloud SQL Insights misses."
 ---
 
 Google Cloud SQL Insights gives you query-level visibility with execution plans and wait events — a solid foundation. What it can't do is connect the query layer to what's happening beneath it: a storage autoscaling event causing an I/O spike, a maintenance reboot leaving your buffer pool cold, or a shared-core instance exhausting its CPU burst credits. QueryComment adds that infrastructure correlation layer on top of the query visibility you already have, so when latency climbs you can tell immediately whether the cause is in your SQL or in the platform.
@@ -78,7 +78,7 @@ Cloud SQL runs on GCP infrastructure, and several platform-level events regularl
 
 <Steps>
   <Step title="Enable Required Database Flags">
-    **For Cloud SQL PostgreSQL**, enable `pg_stat_statements` by adding it to the `cloudsql.enable_pgaudit` or `shared_preload_libraries` flag in the Cloud SQL console, then run:
+    **For Cloud SQL PostgreSQL**, enable `pg_stat_statements` by adding it to the `shared_preload_libraries` flag in the Cloud SQL console under **Database flags**, then run:
 
     ```sql
     CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
@@ -102,7 +102,6 @@ Cloud SQL runs on GCP infrastructure, and several platform-level events regularl
     CREATE ROLE querycomment_monitor WITH LOGIN PASSWORD 'choose-a-strong-password';
     GRANT pg_monitor TO querycomment_monitor;
     GRANT SELECT ON ALL TABLES IN SCHEMA pg_catalog TO querycomment_monitor;
-    GRANT EXECUTE ON FUNCTION pg_stat_statements_reset() TO querycomment_monitor;
     ```
 
     **Cloud SQL MySQL:**

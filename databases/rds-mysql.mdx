@@ -1,7 +1,7 @@
 ---
 title: "AWS RDS MySQL Observability Beyond Performance Insights"
 sidebarTitle: "RDS MySQL"
-description: "Deep performance_schema integration for RDS MySQL — execution plan history, InnoDB internals, lock wait tracking, and RDS-specific failure mode correlation."
+description: "Deep performance_schema monitoring for RDS MySQL — execution plan history, InnoDB internals, lock waits, and RDS-specific failure mode correlation."
 ---
 
 AWS RDS MySQL gives you Enhanced Monitoring for OS-level metrics and Performance Insights for top SQL by wait events. These tools tell you that CPU spiked and which query was running at the time. They don't tell you why that query started doing a full table scan when it was using an index yesterday, why InnoDB lock waits increased after a parameter group change, or whether your instance is the right size for your actual workload. QueryComment fills that gap with deep `performance_schema` integration, per-query execution plan history, and correlation with RDS-specific infrastructure events.

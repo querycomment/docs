@@ -1,5 +1,5 @@
 ---
-title: "Connect Your First Database to QueryComment"
+title: "Quickstart: Connect Your First Database to QueryComment"
 sidebarTitle: "Quickstart"
 description: "Connect your PostgreSQL or MySQL database to QueryComment in under five minutes and start detecting query regressions automatically."
 ---
@@ -13,38 +13,6 @@ This guide walks you through connecting your first PostgreSQL or MySQL database 
 <Steps>
   <Step title="Request Early Access">
     QueryComment is currently in early access. Visit [querycomment.com](https://querycomment.com) to sign up. Once your account is approved, you'll receive an API key from your dashboard — you'll need it in the next step.
-  </Step>
-
-  <Step title="Deploy the Agent">
-    The QueryComment agent is a single binary or container sidecar. It requires network access to your database and outbound HTTPS to the QueryComment API. No inbound ports need to be opened.
-
-    **Option A — Docker (recommended for most setups)**
-
-    Run the agent as a container, passing your database URL and API key as flags:
-
-    ```bash
-    docker run --rm querycomment/agent:latest \
-      --db-url "postgres://user:pass@host:5432/dbname" \
-      --api-key "YOUR_API_KEY"
-    ```
-
-    For MySQL, use a MySQL connection string:
-
-    ```bash
-    docker run --rm querycomment/agent:latest \
-      --db-url "mysql://user:pass@host:3306/dbname" \
-      --api-key "YOUR_API_KEY"
-    ```
-
-    **Option B — Standalone binary**
-
-    Download the binary for your platform from the QueryComment dashboard and run it directly:
-
-    ```bash
-    ./querycomment-agent \
-      --db-url "postgres://user:pass@host:5432/dbname" \
-      --api-key "YOUR_API_KEY"
-    ```
   </Step>
 
   <Step title="Grant Read-Only Access">
@@ -68,6 +36,38 @@ This guide walks you through connecting your first PostgreSQL or MySQL database 
     ```
 
     The `PROCESS` privilege allows the agent to read `performance_schema` and `SHOW PROCESSLIST`. `REPLICATION CLIENT` enables replication state monitoring.
+  </Step>
+
+  <Step title="Deploy the Agent">
+    The QueryComment agent is a single binary or container sidecar. It requires network access to your database and outbound HTTPS to the QueryComment API. No inbound ports need to be opened.
+
+    **Option A — Docker (recommended for most setups)**
+
+    Run the agent as a container, passing the credentials you created above along with your API key:
+
+    ```bash
+    docker run --rm querycomment/agent:latest \
+      --db-url "postgres://querycomment:your-password@host:5432/dbname" \
+      --api-key "YOUR_API_KEY"
+    ```
+
+    For MySQL, use a MySQL connection string:
+
+    ```bash
+    docker run --rm querycomment/agent:latest \
+      --db-url "mysql://querycomment:your-password@host:3306/dbname" \
+      --api-key "YOUR_API_KEY"
+    ```
+
+    **Option B — Standalone binary**
+
+    Download the binary for your platform from the QueryComment dashboard and run it directly:
+
+    ```bash
+    ./querycomment-agent \
+      --db-url "postgres://querycomment:your-password@host:5432/dbname" \
+      --api-key "YOUR_API_KEY"
+    ```
   </Step>
 
   <Step title="Verify the Connection">

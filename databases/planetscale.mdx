@@ -1,7 +1,7 @@
 ---
-title: "PlanetScale Database Monitoring with QueryComment"
+title: "PlanetScale MySQL Database Monitoring with QueryComment"
 sidebarTitle: "PlanetScale"
-description: "Vitess-aware query monitoring for PlanetScale — track VTGate routing overhead, schema deploy impact, scatter-gather patterns, and per-shard query performance."
+description: "Vitess-aware query monitoring for PlanetScale: track VTGate routing overhead, schema deploy impact, scatter query detection, and per-shard performance."
 ---
 
 PlanetScale is Vitess under the hood — horizontal MySQL scaling with VTGate handling query routing, connection pooling, and online schema migrations. Standard MySQL monitoring tools see queries after Vitess has already processed them, which means they miss VTGate routing time, scatter-gather overhead for cross-shard queries, and the rewriting Vitess applies to queries before they reach MySQL. QueryComment tracks query performance through the full PlanetScale stack, from the moment a query enters VTGate to the per-shard MySQL execution that fulfills it.

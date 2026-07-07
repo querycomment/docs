@@ -1,7 +1,7 @@
 ---
 title: "MySQL Monitoring and Observability with QueryComment"
 sidebarTitle: "MySQL"
-description: "Connect QueryComment to your MySQL database for three-layer observability that goes beyond slow query logs to detect regressions, InnoDB internals, and infrastructure issues."
+description: "Connect QueryComment to MySQL for query regression detection, InnoDB engine diagnostics, and infrastructure correlation beyond the slow query log."
 ---
 
 The MySQL slow query log uses a static latency threshold — any query faster than that threshold is invisible, regardless of how much it has regressed. A query that took 5ms last month and takes 900ms today never appears in the log if your threshold is set to 1 second. QueryComment takes a different approach: it baselines every normalized query fingerprint from `performance_schema`, detects statistically significant regressions against that baseline, and correlates query behavior with InnoDB engine state and infrastructure metrics so you understand not just that a query slowed down, but exactly why.
@@ -150,7 +150,7 @@ Infrastructure metrics are correlated with database signals automatically. An IO
 
     ```bash
     querycomment-agent \
-      --dsn "querycomment:your-password@tcp(your-host:3306)/performance_schema" \
+      --db-url "querycomment:your-password@tcp(your-host:3306)/performance_schema" \
       --api-key "your-api-key"
     ```
 

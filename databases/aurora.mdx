@@ -1,7 +1,7 @@
 ---
-title: "AWS Aurora PostgreSQL and MySQL Monitoring"
+title: "Aurora PostgreSQL and MySQL Monitoring with QueryComment"
 sidebarTitle: "Aurora"
-description: "Three-layer observability for Aurora that goes beyond Performance Insights and CloudWatch — correlate query regressions with storage, failover, and replication events."
+description: "Three-layer Aurora observability beyond Performance Insights — correlate query regressions with storage layer latency, failover, and replication events."
 ---
 
 AWS Aurora gives you Performance Insights for top SQL by wait time and CloudWatch for infrastructure metrics — but neither tool connects the two layers. When CPU spikes during a background storage reclamation event and a query starts doing a full table scan in the same window, Performance Insights shows you the slow query and CloudWatch shows you the I/O spike, but nothing tells you they're related. QueryComment correlates query-level execution data with Aurora-specific storage, replication, and failover signals so you can find causes, not just symptoms.

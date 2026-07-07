@@ -1,7 +1,7 @@
 ---
-title: "Drift Detection: Catch Database Issues Before They Become Incidents"
+title: "Drift Detection: Catch Slow Database Degradation Early"
 sidebarTitle: "Drift Detection"
-description: "QueryComment uses statistical trend analysis to detect gradual database degradation days before static alert thresholds fire, giving you time to remediate before users are affected."
+description: "QueryComment detects gradual latency drift and cache erosion days before static thresholds fire, giving you time to remediate before users are impacted."
 ---
 
 The most damaging database problems are not the ones that crash your system — those are obvious and fast to fix. The most damaging problems are the slow ones: query latency that drifts up by a millisecond a day, a buffer cache hit rate that erodes a fraction of a percent each week, dead tuple accumulation that quietly grows for two weeks before it causes a visible incident. Static alerting thresholds miss every one of these. QueryComment's drift detection engine is designed specifically for the gradual degradation that static thresholds cannot see.

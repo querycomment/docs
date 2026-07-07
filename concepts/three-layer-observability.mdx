@@ -1,7 +1,7 @@
 ---
-title: "Three-Layer Database Observability Explained"
+title: "Three-Layer Database Observability: Query, Engine, Infra"
 sidebarTitle: "Three Layers"
-description: "QueryComment monitors query performance, database engine internals, and infrastructure metrics simultaneously to detect problems across all three levels of your database stack."
+description: "QueryComment monitors query performance, engine internals, and infrastructure simultaneously to diagnose root causes across all three layers."
 ---
 
 Most database monitoring tools watch one thing: query latency, or CPU usage, or replication lag. That single-layer view tells you *that* something is wrong, but rarely *why*. A slow query could be caused by a missing index, a bloated table blocking autovacuum, an exhausted EBS burst credit balance, or a long-running transaction holding a lock — and each of those root causes lives at a different layer of your stack. QueryComment monitors all three layers simultaneously and connects signals across them, so you get the full picture instead of a dashboard full of unrelated gauges.

@@ -1,7 +1,7 @@
 ---
 title: "Cross-Layer Correlation: From Symptoms to Root Causes"
 sidebarTitle: "Correlation Engine"
-description: "QueryComment's reasoning engine links query regressions to engine-level and infrastructure-level changes to produce causal chains you can act on immediately."
+description: "QueryComment links query regressions to engine and infrastructure changes, building a directed causal graph so you know exactly what to fix and why."
 ---
 
 Collecting metrics across three layers of your database stack produces a lot of data. The value is not in the data itself — it is in the connections between signals that would otherwise sit in separate dashboards with no relationship to each other. When your p95 latency rises, QueryComment does not just tell you that a query is slow. It searches the engine and infrastructure layers for changes that are temporally and causally related to the regression, builds a directed graph of cause and effect, and surfaces a single finding that tells you what happened, why, and what to do about it.
@@ -32,7 +32,7 @@ This approach means QueryComment avoids the two failure modes that plague simple
 
 ## A complete causal chain example
 
-The following example shows how cross-layer correlation works for a real-world scenario: a SaaS application running on PostgreSQL with an AWS gp3 EBS volume.
+The following example shows how cross-layer correlation works for a real-world scenario: a SaaS application running on PostgreSQL with an AWS gp2 EBS volume.
 
 **The presenting symptom:** Your application is experiencing intermittent slowness on the product listing page. Traditional monitoring shows nothing — CPU is at 40%, average query latency looks fine, no alerts have fired.
 
