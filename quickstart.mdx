@@ -128,7 +128,7 @@ Set these environment variables before starting `otelcol-contrib`:
 | `PG_PASSWORD` | Monitoring user password. |
 | `PG_DBNAME` | Database to connect to. Use a database where `pg_stat_statements` is installed. |
 | `PG_SSLMODE` | PostgreSQL SSL mode, such as `require`, `verify-full`, or `disable`. |
-| `QC_ENDPOINT` | QueryComment ingest endpoint, for example `https://ingest.querycomment.com`. |
+| `QC_ENDPOINT` | QueryComment ingest endpoint, for example `ingest.querycomment.com:4317`. |
 | `QC_INGEST_TOKEN` | QueryComment API ingest value from your dashboard. |
 | `PG_CLUSTER_NAME` | Cluster name to attach to exported metrics. |
 | `OTEL_ENVIRONMENT` | Deployment environment. Defaults to `production` if omitted. |
@@ -143,7 +143,7 @@ PG_PASSWORD=replace-with-strong-password
 PG_DBNAME=app
 PG_SSLMODE=require
 
-QC_ENDPOINT=https://ingest.querycomment.com
+QC_ENDPOINT=ingest.querycomment.com:4317
 QC_INGEST_TOKEN=replace-with-querycomment-api-ingest
 PG_CLUSTER_NAME=production-postgres
 OTEL_ENVIRONMENT=production
@@ -182,7 +182,7 @@ processors:
     timeout: 5s
 
 exporters:
-  otlphttp/backend:
+  otlp/backend:
     endpoint: ${env:QC_ENDPOINT}
     headers:
       authorization: ${env:QC_INGEST_TOKEN}
@@ -361,7 +361,7 @@ service:
     metrics/postgres:
       receivers: [postgresql, sqlquery/pg_statements_postgres_v13_16]
       processors: [memory_limiter, resource, batch]
-      exporters: [otlphttp/backend]
+      exporters: [otlp/backend]
 ```
 
 </Expandable>
