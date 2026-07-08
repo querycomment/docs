@@ -162,6 +162,17 @@ processors:
     limit_percentage: 80
     spike_limit_percentage: 25
 
+  resourcedetection:
+    detectors: [env, system]
+    timeout: 5s
+    override: true
+    system:
+      hostname_sources: [dns, os]
+      resource_attributes:
+        host.name: { enabled: true }
+        host.id: { enabled: true }
+        os.type: { enabled: true }
+
   resource:
     attributes:
       - key: db.system
@@ -172,9 +183,6 @@ processors:
         action: upsert
       - key: deployment.environment
         value: ${env:OTEL_ENVIRONMENT:-production}
-        action: upsert
-      - key: server.address
-        value: ${env:PG_HOST}
         action: upsert
   batch:
     send_batch_size: 8192
@@ -360,7 +368,7 @@ service:
   pipelines:
     metrics/postgres:
       receivers: [postgresql, sqlquery/pg_statements_postgres_v13_16]
-      processors: [memory_limiter, resource, batch]
+      processors: [memory_limiter, resourcedetection, resource, batch]
       exporters: [otlp/querycomment]
 ```
 
