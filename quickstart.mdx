@@ -193,7 +193,7 @@ exporters:
   otlp/querycomment:
     endpoint: ${env:QC_ENDPOINT:-ingest.querycomment.com:443}
     headers:
-      authorization: ${env:QC_INGEST_TOKEN}
+      authorization: "Bearer ${env:QC_INGEST_TOKEN}"
     compression: gzip
     retry_on_failure:
       enabled: true
