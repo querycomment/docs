@@ -88,51 +88,6 @@ Choose the tab for the database you want to connect.
 
 Use the [`otelcol-contrib` package](https://github.com/open-telemetry/opentelemetry-collector-releases/tree/main/distributions/otelcol-contrib) with the built-in `postgresql` receiver and the [`sqlquery` receiver](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/receiver/sqlqueryreceiver). The `postgresql` receiver collects instance metrics. The `sqlquery` receiver collects statement metrics from `pg_stat_statements`.
 
-### Choose the statement receiver for your PostgreSQL version
-
-The collector config includes the general PostgreSQL receiver, host metrics receiver, and statement receivers for PostgreSQL 11-12, 13-16, and 17+. Choose the `sqlquery/...` statement receiver that matches your PostgreSQL major version in `service.pipelines.metrics/postgres.receivers`.
-
-<Note>
-  Only the receiver referenced in the metrics pipeline starts and connects to PostgreSQL. The other receiver definitions are parsed but not started.
-</Note>
-
-| PostgreSQL version | Receiver |
-| --- | --- |
-| 11-12 | `sqlquery/pg_statements_postgres_v11_12` |
-| 13-16 | `sqlquery/pg_statements_postgres_v13_16` |
-| 17+ | `sqlquery/pg_statements_postgres_v17_plus` |
-
-PostgreSQL 13-16 is the default:
-
-```yaml
-service:
-  pipelines:
-    metrics/postgres:
-      receivers: [hostmetrics, postgresql, sqlquery/pg_statements_postgres_v13_16]
-```
-
-Keep `hostmetrics` and `postgresql` in the receivers list. Change only the `sqlquery/...` receiver for your PostgreSQL version.
-
-For PostgreSQL 11-12:
-
-```yaml
-receivers: [hostmetrics, postgresql, sqlquery/pg_statements_postgres_v11_12]
-```
-
-For PostgreSQL 17+:
-
-```yaml
-receivers: [hostmetrics, postgresql, sqlquery/pg_statements_postgres_v17_plus]
-```
-
-The version-specific query fields are:
-
-| PostgreSQL version | Query differences |
-| --- | --- |
-| 11-12 | Uses `total_time`, `mean_time`, `min_time`, `max_time`, and `stddev_time`. WAL columns do not exist, so `wal_records` and `wal_bytes` are emitted as `0`. |
-| 13-16 | Uses `total_exec_time`, `mean_exec_time`, `min_exec_time`, `max_exec_time`, `stddev_exec_time`, `wal_records`, `wal_bytes`, `blk_read_time`, and `blk_write_time`. |
-| 17+ | Uses the PostgreSQL 13-16 execution and WAL columns. Uses `shared_blk_read_time AS blk_read_time` and `shared_blk_write_time AS blk_write_time`. |
-
 Set these environment variables before starting `otelcol-contrib`:
 
 | Variable | Description |
@@ -427,6 +382,51 @@ service:
 ```
 
 </Expandable>
+
+### Choose the statement receiver for your PostgreSQL version
+
+The collector config includes the general PostgreSQL receiver, host metrics receiver, and statement receivers for PostgreSQL 11-12, 13-16, and 17+. Choose the `sqlquery/...` statement receiver that matches your PostgreSQL major version in `service.pipelines.metrics/postgres.receivers`.
+
+<Note>
+  Only the receiver referenced in the metrics pipeline starts and connects to PostgreSQL. The other receiver definitions are parsed but not started.
+</Note>
+
+| PostgreSQL version | Receiver |
+| --- | --- |
+| 11-12 | `sqlquery/pg_statements_postgres_v11_12` |
+| 13-16 | `sqlquery/pg_statements_postgres_v13_16` |
+| 17+ | `sqlquery/pg_statements_postgres_v17_plus` |
+
+PostgreSQL 13-16 is the default:
+
+```yaml
+service:
+  pipelines:
+    metrics/postgres:
+      receivers: [hostmetrics, postgresql, sqlquery/pg_statements_postgres_v13_16]
+```
+
+Keep `hostmetrics` and `postgresql` in the receivers list. Change only the `sqlquery/...` receiver for your PostgreSQL version.
+
+For PostgreSQL 11-12:
+
+```yaml
+receivers: [hostmetrics, postgresql, sqlquery/pg_statements_postgres_v11_12]
+```
+
+For PostgreSQL 17+:
+
+```yaml
+receivers: [hostmetrics, postgresql, sqlquery/pg_statements_postgres_v17_plus]
+```
+
+The version-specific query fields are:
+
+| PostgreSQL version | Query differences |
+| --- | --- |
+| 11-12 | Uses `total_time`, `mean_time`, `min_time`, `max_time`, and `stddev_time`. WAL columns do not exist, so `wal_records` and `wal_bytes` are emitted as `0`. |
+| 13-16 | Uses `total_exec_time`, `mean_exec_time`, `min_exec_time`, `max_exec_time`, `stddev_exec_time`, `wal_records`, `wal_bytes`, `blk_read_time`, and `blk_write_time`. |
+| 17+ | Uses the PostgreSQL 13-16 execution and WAL columns. Uses `shared_blk_read_time AS blk_read_time` and `shared_blk_write_time AS blk_write_time`. |
 
 Run the collector after you save `otel-collector.yaml`:
 
