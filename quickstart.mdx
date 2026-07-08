@@ -390,9 +390,6 @@ docker run --rm \
   --config /etc/otelcol-contrib/config.yaml
 ```
 
-<Warning>
-  `query_text` is a high-cardinality metric attribute. Keep it during onboarding if you need to inspect query fingerprints. Remove it from each `attribute_columns` list if you need lower cardinality.
-</Warning>
   </Tab>
 
   <Tab title="MySQL">
