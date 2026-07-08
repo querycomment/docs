@@ -214,9 +214,9 @@ receivers:
     transport: tcp
     username: ${env:PG_USER}
     password: ${env:PG_PASSWORD}
-    databases: [] # empty = all non-template DBs, instance-wide
-    # exclude_databases: [postgres, template0, template1]
-    collection_interval: 60s
+    databases: []
+    # exclude_databases: [postgres, template0, template1] # optional
+    collection_interval: 15s
     tls:
       insecure: false
       insecure_skip_verify: false
