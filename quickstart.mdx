@@ -209,6 +209,26 @@ exporters:
     verbosity: normal
 
 receivers:
+  hostmetrics:
+    collection_interval: 30s
+    # root_path: /hostfs # set when containerized with host / mounted at /hostfs
+    scrapers:
+      cpu: {}
+      load: {}
+      memory: {}
+      paging: {}
+      processes: {}
+      system: {}
+      disk: {}
+      filesystem:
+        exclude_fs_types:
+          fs_types: [nfs, nfs4, cifs, smb3]
+          match_type: strict
+      network:
+        metrics:
+          system.network.connections:
+            enabled: false
+
   postgresql:
     endpoint: ${env:PG_HOST}:${env:PG_PORT}
     transport: tcp
@@ -367,7 +387,7 @@ receivers:
 service:
   pipelines:
     metrics/postgres:
-      receivers: [postgresql, sqlquery/pg_statements_postgres_v13_16]
+      receivers: [hostmetrics, postgresql, sqlquery/pg_statements_postgres_v13_16]
       processors: [memory_limiter, resourcedetection, resource/postgres, batch]
       exporters: [otlp/querycomment]
 ```
