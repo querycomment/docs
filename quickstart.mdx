@@ -182,7 +182,7 @@ processors:
     timeout: 5s
 
 exporters:
-  otlp/backend:
+  otlp/querycomment:
     endpoint: ${env:QC_ENDPOINT}
     headers:
       authorization: ${env:QC_INGEST_TOKEN}
@@ -361,7 +361,7 @@ service:
     metrics/postgres:
       receivers: [postgresql, sqlquery/pg_statements_postgres_v13_16]
       processors: [memory_limiter, resource, batch]
-      exporters: [otlp/backend]
+      exporters: [otlp/querycomment]
 ```
 
 </Expandable>
