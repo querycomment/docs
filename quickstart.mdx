@@ -88,7 +88,9 @@ Choose the tab for the database you want to connect.
 
 Use the [`otelcol-contrib` package](https://github.com/open-telemetry/opentelemetry-collector-releases/tree/main/distributions/otelcol-contrib) with the built-in `postgresql` receiver and the [`sqlquery` receiver](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/receiver/sqlqueryreceiver). The `postgresql` receiver collects instance metrics. The `sqlquery` receiver collects statement metrics from `pg_stat_statements`.
 
-The collector config includes the general PostgreSQL receiver and statement receivers for PostgreSQL 11-12, 13-16, and 17+. Choose the statement receiver that matches your PostgreSQL major version in `service.pipelines.metrics/postgres.receivers`.
+### Choose the statement receiver for your PostgreSQL version
+
+The collector config includes the general PostgreSQL receiver, host metrics receiver, and statement receivers for PostgreSQL 11-12, 13-16, and 17+. Choose the `sqlquery/...` statement receiver that matches your PostgreSQL major version in `service.pipelines.metrics/postgres.receivers`.
 
 <Note>
   Only the receiver referenced in the metrics pipeline starts and connects to PostgreSQL. The other receiver definitions are parsed but not started.
@@ -106,10 +108,22 @@ PostgreSQL 13-16 is the default:
 service:
   pipelines:
     metrics/postgres:
-      receivers: [postgresql, sqlquery/pg_statements_postgres_v13_16]
+      receivers: [hostmetrics, postgresql, sqlquery/pg_statements_postgres_v13_16]
 ```
 
-Keep `postgresql` in the receivers list. Change only the `sqlquery/...` receiver for your PostgreSQL version.
+Keep `hostmetrics` and `postgresql` in the receivers list. Change only the `sqlquery/...` receiver for your PostgreSQL version.
+
+For PostgreSQL 11-12:
+
+```yaml
+receivers: [hostmetrics, postgresql, sqlquery/pg_statements_postgres_v11_12]
+```
+
+For PostgreSQL 17+:
+
+```yaml
+receivers: [hostmetrics, postgresql, sqlquery/pg_statements_postgres_v17_plus]
+```
 
 The version-specific query fields are:
 
