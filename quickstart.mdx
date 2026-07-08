@@ -1,97 +1,448 @@
 ---
-title: "Quickstart: Connect Your First Database to QueryComment"
-sidebarTitle: "Quickstart"
-description: "Connect your PostgreSQL or MySQL database to QueryComment in under five minutes and start detecting query regressions automatically."
+title: "Getting started with QueryComment"
+sidebarTitle: "Getting started"
+description: "Connect QueryComment to PostgreSQL or MySQL with a read-only monitoring user."
 ---
 
-This guide walks you through connecting your first PostgreSQL or MySQL database to QueryComment. By the end, the QueryComment agent will be running alongside your database, reading from stats views, and building latency baselines for every query fingerprint it observes. No code changes are required, and the agent never modifies your database.
+Connect your first database by creating a dedicated monitoring user, enabling the statistics source for your engine, and running the OTel agent for your database.
 
 <Note>
-  The QueryComment agent connects with read-only access only. It reads from `pg_stat_statements` (PostgreSQL) or `performance_schema` (MySQL) and never issues writes, DDL, or queries against your application data.
+  QueryComment reads aggregate query, engine, and infrastructure telemetry. The OTel agent does not proxy application traffic and does not write to your application tables.
 </Note>
 
-<Steps>
-  <Step title="Request Early Access">
-    QueryComment is currently in early access. Visit [querycomment.com](https://querycomment.com) to sign up. Once your account is approved, you'll receive an API key from your dashboard — you'll need it in the next step.
-  </Step>
+## Prerequisites
 
-  <Step title="Grant Read-Only Access">
-    Create a dedicated monitoring user with the minimum permissions the agent needs. Do not reuse your application user credentials.
+Before you start, make sure you have:
 
-    **PostgreSQL**
+- A QueryComment API ingest from your dashboard
+- Permission to create a monitoring user and grant monitoring privileges
+- Outbound HTTPS access from the OTel agent host to `ingest.querycomment.com`
 
-    ```sql
-    CREATE USER querycomment WITH PASSWORD 'your-password';
-    GRANT pg_monitor TO querycomment;
-    GRANT SELECT ON ALL TABLES IN SCHEMA pg_catalog TO querycomment;
-    ```
+| Database | Default port | Primary query source | Required setup |
+| --- | --- | --- | --- |
+| PostgreSQL | `5432` | `pg_stat_statements` | Enable the extension and grant `pg_monitor` |
+| MySQL | `3306` | `performance_schema` | Enable statement digests and grant monitoring privileges |
 
-    The `pg_monitor` role (available in PostgreSQL 10+) gives the agent access to `pg_stat_statements`, `pg_stat_activity`, `pg_stat_replication`, and related stats views.
+## Prepare your database
 
-    **MySQL**
+Choose the tab for the database you want to connect.
 
-    ```sql
-    CREATE USER 'querycomment'@'%' IDENTIFIED BY 'your-password';
-    GRANT SELECT, PROCESS, REPLICATION CLIENT ON *.* TO 'querycomment'@'%';
-    ```
+<Tabs>
+  <Tab title="PostgreSQL">
+    <Steps>
+      <Step title="Enable pg_stat_statements">
+        QueryComment uses `pg_stat_statements` to read normalized query statistics.
 
-    The `PROCESS` privilege allows the agent to read `performance_schema` and `SHOW PROCESSLIST`. `REPLICATION CLIENT` enables replication state monitoring.
-  </Step>
+        Check whether it is already loaded:
 
-  <Step title="Deploy the Agent">
-    The QueryComment agent is a single binary or container sidecar. It requires network access to your database and outbound HTTPS to the QueryComment API. No inbound ports need to be opened.
+        ```sql
+        SHOW shared_preload_libraries;
+        ```
 
-    **Option A — Docker (recommended for most setups)**
+        If `pg_stat_statements` is not listed, add it to `postgresql.conf` or your managed database parameter group:
 
-    Run the agent as a container, passing the credentials you created above along with your API key:
+        ```ini
+        shared_preload_libraries = 'pg_stat_statements'
+        ```
 
-    ```bash
-    docker run --rm querycomment/agent:latest \
-      --db-url "postgres://querycomment:your-password@host:5432/dbname" \
-      --api-key "YOUR_API_KEY"
-    ```
+        Restart PostgreSQL, then create the extension in the database you want to monitor:
 
-    For MySQL, use a MySQL connection string:
+        ```sql
+        CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+        ```
 
-    ```bash
-    docker run --rm querycomment/agent:latest \
-      --db-url "mysql://querycomment:your-password@host:3306/dbname" \
-      --api-key "YOUR_API_KEY"
-    ```
+        <Warning>
+          Changing `shared_preload_libraries` requires a PostgreSQL restart. Schedule this during a maintenance window for production databases.
+        </Warning>
+      </Step>
 
-    **Option B — Standalone binary**
+      <Step title="Create the monitoring user">
+        Connect as a privileged PostgreSQL user and run:
 
-    Download the binary for your platform from the QueryComment dashboard and run it directly:
+        ```sql
+        CREATE USER querycomment WITH PASSWORD 'replace-with-strong-password';
+        GRANT pg_monitor TO querycomment;
+        GRANT pg_read_all_stats TO querycomment;
+        ```
 
-    ```bash
-    ./querycomment-agent \
-      --db-url "postgres://querycomment:your-password@host:5432/dbname" \
-      --api-key "YOUR_API_KEY"
-    ```
-  </Step>
+        `pg_monitor` gives the OTel agent read access to PostgreSQL monitoring views. `pg_read_all_stats` lets the receiver read `queryid` and query text for statements run by other roles.
+      </Step>
 
-  <Step title="Verify the Connection">
-    After starting the agent, open the QueryComment dashboard. Within 60 seconds the database connection status will change to **Connected** and you'll see the agent version and last heartbeat time.
+      <Step title="Verify access">
+        Confirm the monitoring user can read statement statistics:
 
-    If the status doesn't update within two minutes, check:
-    - The database host is reachable from wherever the agent is running
-    - The monitoring user credentials are correct
-    - The agent has outbound HTTPS access to `api.querycomment.com`
+        ```sql
+        SET ROLE querycomment;
+        SELECT calls, query
+        FROM pg_stat_statements
+        LIMIT 5;
+        RESET ROLE;
+        ```
 
-    The agent will log connection errors to stdout — run with `--log-level debug` for verbose output.
-  </Step>
+        If this query fails, confirm that `pg_stat_statements` is installed in the same database used by the OTel agent connection string.
+      </Step>
+    </Steps>
 
-  <Step title="Explore Your First Insights">
-    The agent begins collecting data immediately. Here's what to expect over time:
+### Configure the OTel receiver
 
-    - **Within 15 minutes** — the Query Performance view in your dashboard will show latency percentiles (p50/p95/p99) and execution counts for every fingerprinted query.
-    - **Within 1 hour** — buffer hit rates, rows examined/returned ratios, and engine-layer metrics (autovacuum activity, lock contention, buffer pool utilization) will populate.
-    - **After 24 hours** — drift detection has enough baseline history to flag latency regressions with statistical confidence. This is when QueryComment's early-warning capabilities come fully online.
+Use the [`otelcol-contrib` package](https://github.com/open-telemetry/opentelemetry-collector-releases/tree/main/distributions/otelcol-contrib) with the [`sqlquery` receiver](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/receiver/sqlqueryreceiver) to collect PostgreSQL statement metrics from `pg_stat_statements`.
 
-    Start by reviewing the **Top Queries** view, sorted by p95 latency. These are your highest-leverage optimization targets.
-  </Step>
-</Steps>
+The collector config includes receivers for PostgreSQL 11-12, 13-16, and 17+. Choose the receiver that matches your PostgreSQL major version in `service.pipelines.metrics/postgres_statements.receivers`.
 
-<Tip>
-  For database-specific setup instructions — including Supabase, Neon, Amazon Aurora, PlanetScale, AWS RDS MySQL, and Google Cloud SQL — see the platform guides in the sidebar. Managed platforms sometimes require additional steps to enable `pg_stat_statements` or grant monitoring permissions.
-</Tip>
+<Note>
+  Only the receiver referenced in the metrics pipeline starts and connects to PostgreSQL. The other receiver definitions are parsed but not started.
+</Note>
+
+| PostgreSQL version | Receiver |
+| --- | --- |
+| 11-12 | `sqlquery/pg_statements_postgres_v11_12` |
+| 13-16 | `sqlquery/pg_statements_postgres_v13_16` |
+| 17+ | `sqlquery/pg_statements_postgres_v17_plus` |
+
+PostgreSQL 13-16 is the default:
+
+```yaml
+service:
+  pipelines:
+    metrics/postgres_statements:
+      receivers: [sqlquery/pg_statements_postgres_v13_16]
+```
+
+The version-specific query fields are:
+
+| PostgreSQL version | Query differences |
+| --- | --- |
+| 11-12 | Uses `total_time`, `mean_time`, `min_time`, `max_time`, and `stddev_time`. WAL columns do not exist, so `wal_records` and `wal_bytes` are emitted as `0`. |
+| 13-16 | Uses `total_exec_time`, `mean_exec_time`, `min_exec_time`, `max_exec_time`, `stddev_exec_time`, `wal_records`, `wal_bytes`, `blk_read_time`, and `blk_write_time`. |
+| 17+ | Uses the PostgreSQL 13-16 execution and WAL columns. Uses `shared_blk_read_time AS blk_read_time` and `shared_blk_write_time AS blk_write_time`. |
+
+Set these environment variables before starting `otelcol-contrib`:
+
+| Variable | Description |
+| --- | --- |
+| `PG_HOST` | PostgreSQL host name or IP address. |
+| `PG_PORT` | PostgreSQL port. Use `5432` unless your instance uses a different port. |
+| `PG_USER` | Monitoring user name. |
+| `PG_PASSWORD` | Monitoring user password. |
+| `PG_DBNAME` | Database to connect to. Use a database where `pg_stat_statements` is installed. |
+| `PG_SSLMODE` | PostgreSQL SSL mode, such as `require`, `verify-full`, or `disable`. |
+| `OTLP_ENDPOINT` | QueryComment ingest endpoint, for example `https://ingest.querycomment.com`. |
+| `OTLP_API_KEY` | QueryComment API ingest value from your dashboard. |
+| `OTEL_SERVICE_NAME` | Service name to attach to exported metrics. |
+| `OTEL_ENVIRONMENT` | Deployment environment. Defaults to `production` if omitted. |
+| `CUSTOMER_ID` | Customer identifier to attach to exported metrics. |
+| `OTEL_HEALTHCHECK_ENDPOINT` | Collector health check bind address, such as `0.0.0.0:13133`. |
+| `OTEL_LOG_LEVEL` | Collector log level, such as `info` or `debug`. |
+
+Example `.env` file:
+
+```bash
+PG_HOST=db.example.com
+PG_PORT=5432
+PG_USER=querycomment
+PG_PASSWORD=replace-with-strong-password
+PG_DBNAME=app
+PG_SSLMODE=require
+
+OTLP_ENDPOINT=https://ingest.querycomment.com
+OTLP_API_KEY=replace-with-querycomment-api-ingest
+OTEL_SERVICE_NAME=querycomment-postgres
+OTEL_ENVIRONMENT=production
+CUSTOMER_ID=replace-with-customer-id
+OTEL_HEALTHCHECK_ENDPOINT=0.0.0.0:13133
+OTEL_LOG_LEVEL=info
+```
+
+<Expandable title="otel-collector.yaml">
+
+```yaml
+extensions:
+  health_check:
+    endpoint: ${env:OTEL_HEALTHCHECK_ENDPOINT}
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+
+  resource:
+    attributes:
+      - key: db.system
+        value: postgresql
+        action: upsert
+      - key: service.name
+        value: ${env:OTEL_SERVICE_NAME}
+        action: upsert
+      - key: deployment.environment
+        value: ${env:OTEL_ENVIRONMENT:-production}
+        action: upsert
+      - key: server.address
+        value: ${env:PG_HOST}
+        action: upsert
+      - key: customer.id
+        value: ${env:CUSTOMER_ID}
+        action: upsert
+
+  batch:
+    send_batch_size: 8192
+    send_batch_max_size: 10000
+    timeout: 5s
+
+exporters:
+  otlphttp/backend:
+    endpoint: ${env:OTLP_ENDPOINT}
+    headers:
+      authorization: ${env:OTLP_API_KEY}
+    compression: gzip
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 5000
+
+  debug:
+    verbosity: normal
+
+receivers:
+  sqlquery/pg_statements_postgres_v13_16:
+    driver: postgres
+    datasource: "host=${env:PG_HOST} port=${env:PG_PORT} user=${env:PG_USER} password=${env:PG_PASSWORD} dbname=${env:PG_DBNAME} sslmode=${env:PG_SSLMODE}"
+    collection_interval: 60s
+    max_open_conn: 2
+    queries:
+      - sql: |
+          SELECT
+            pgss.queryid::text AS query_id,
+            LEFT(pgss.query, 500) AS query_text,
+            COALESCE(pg_database.datname, 'unknown') AS database_name,
+            COALESCE(pg_roles.rolname, 'unknown') AS role_name,
+            pgss.calls AS calls,
+            pgss.total_exec_time AS total_exec_time,
+            pgss.mean_exec_time AS mean_exec_time,
+            pgss.min_exec_time AS min_exec_time,
+            pgss.max_exec_time AS max_exec_time,
+            pgss.stddev_exec_time AS stddev_exec_time,
+            pgss.rows AS rows,
+            pgss.shared_blks_hit AS shared_blks_hit,
+            pgss.shared_blks_read AS shared_blks_read,
+            pgss.shared_blks_dirtied AS shared_blks_dirtied,
+            pgss.shared_blks_written AS shared_blks_written,
+            pgss.temp_blks_read AS temp_blks_read,
+            pgss.temp_blks_written AS temp_blks_written,
+            pgss.wal_records AS wal_records,
+            pgss.wal_bytes AS wal_bytes,
+            pgss.blk_read_time AS blk_read_time,
+            pgss.blk_write_time AS blk_write_time
+          FROM pg_stat_statements AS pgss
+          LEFT JOIN pg_roles ON pgss.userid = pg_roles.oid
+          LEFT JOIN pg_database ON pgss.dbid = pg_database.oid
+          WHERE pgss.queryid IS NOT NULL
+            AND pgss.query NOT ILIKE '%pg_stat_statements%'
+            AND pgss.query NOT ILIKE '%pg_catalog%'
+            AND pgss.query NOT ILIKE 'EXPLAIN%'
+            AND pgss.query NOT ILIKE 'PREPARE otel_%'
+            AND pgss.query NOT ILIKE 'CREATE %'
+          ORDER BY pgss.total_exec_time DESC
+          LIMIT 250
+        metrics: &stmt_metrics
+          - { metric_name: postgresql.stmt.calls, value_column: calls, attribute_columns: [query_id, database_name, role_name, query_text], value_type: int, data_type: sum, monotonic: true, aggregation: cumulative }
+          - { metric_name: postgresql.stmt.total_exec_time, value_column: total_exec_time, attribute_columns: [query_id, database_name, role_name, query_text], value_type: double, data_type: sum, monotonic: true, aggregation: cumulative, unit: ms }
+          - { metric_name: postgresql.stmt.mean_exec_time, value_column: mean_exec_time, attribute_columns: [query_id, database_name, role_name, query_text], value_type: double, data_type: gauge, unit: ms }
+          - { metric_name: postgresql.stmt.min_exec_time, value_column: min_exec_time, attribute_columns: [query_id, database_name, role_name, query_text], value_type: double, data_type: gauge, unit: ms }
+          - { metric_name: postgresql.stmt.max_exec_time, value_column: max_exec_time, attribute_columns: [query_id, database_name, role_name, query_text], value_type: double, data_type: gauge, unit: ms }
+          - { metric_name: postgresql.stmt.stddev_exec_time, value_column: stddev_exec_time, attribute_columns: [query_id, database_name, role_name, query_text], value_type: double, data_type: gauge, unit: ms }
+          - { metric_name: postgresql.stmt.rows, value_column: rows, attribute_columns: [query_id, database_name, role_name, query_text], value_type: int, data_type: sum, monotonic: true, aggregation: cumulative }
+          - { metric_name: postgresql.stmt.shared_blks_hit, value_column: shared_blks_hit, attribute_columns: [query_id, database_name, role_name, query_text], value_type: int, data_type: sum, monotonic: true, aggregation: cumulative }
+          - { metric_name: postgresql.stmt.shared_blks_read, value_column: shared_blks_read, attribute_columns: [query_id, database_name, role_name, query_text], value_type: int, data_type: sum, monotonic: true, aggregation: cumulative }
+          - { metric_name: postgresql.stmt.shared_blks_dirtied, value_column: shared_blks_dirtied, attribute_columns: [query_id, database_name, role_name, query_text], value_type: int, data_type: sum, monotonic: true, aggregation: cumulative }
+          - { metric_name: postgresql.stmt.shared_blks_written, value_column: shared_blks_written, attribute_columns: [query_id, database_name, role_name, query_text], value_type: int, data_type: sum, monotonic: true, aggregation: cumulative }
+          - { metric_name: postgresql.stmt.temp_blks_read, value_column: temp_blks_read, attribute_columns: [query_id, database_name, role_name, query_text], value_type: int, data_type: sum, monotonic: true, aggregation: cumulative }
+          - { metric_name: postgresql.stmt.temp_blks_written, value_column: temp_blks_written, attribute_columns: [query_id, database_name, role_name, query_text], value_type: int, data_type: sum, monotonic: true, aggregation: cumulative }
+          - { metric_name: postgresql.stmt.wal_records, value_column: wal_records, attribute_columns: [query_id, database_name, role_name, query_text], value_type: int, data_type: sum, monotonic: true, aggregation: cumulative }
+          - { metric_name: postgresql.stmt.wal_bytes, value_column: wal_bytes, attribute_columns: [query_id, database_name, role_name, query_text], value_type: int, data_type: sum, monotonic: true, aggregation: cumulative, unit: By }
+          - { metric_name: postgresql.stmt.blk_read_time, value_column: blk_read_time, attribute_columns: [query_id, database_name, role_name, query_text], value_type: double, data_type: sum, monotonic: true, aggregation: cumulative, unit: ms }
+          - { metric_name: postgresql.stmt.blk_write_time, value_column: blk_write_time, attribute_columns: [query_id, database_name, role_name, query_text], value_type: double, data_type: sum, monotonic: true, aggregation: cumulative, unit: ms }
+
+  sqlquery/pg_statements_postgres_v17_plus:
+    driver: postgres
+    datasource: "host=${env:PG_HOST} port=${env:PG_PORT} user=${env:PG_USER} password=${env:PG_PASSWORD} dbname=${env:PG_DBNAME} sslmode=${env:PG_SSLMODE}"
+    collection_interval: 60s
+    max_open_conn: 2
+    queries:
+      - sql: |
+          SELECT
+            pgss.queryid::text AS query_id,
+            LEFT(pgss.query, 500) AS query_text,
+            COALESCE(pg_database.datname, 'unknown') AS database_name,
+            COALESCE(pg_roles.rolname, 'unknown') AS role_name,
+            pgss.calls AS calls,
+            pgss.total_exec_time AS total_exec_time,
+            pgss.mean_exec_time AS mean_exec_time,
+            pgss.min_exec_time AS min_exec_time,
+            pgss.max_exec_time AS max_exec_time,
+            pgss.stddev_exec_time AS stddev_exec_time,
+            pgss.rows AS rows,
+            pgss.shared_blks_hit AS shared_blks_hit,
+            pgss.shared_blks_read AS shared_blks_read,
+            pgss.shared_blks_dirtied AS shared_blks_dirtied,
+            pgss.shared_blks_written AS shared_blks_written,
+            pgss.temp_blks_read AS temp_blks_read,
+            pgss.temp_blks_written AS temp_blks_written,
+            pgss.wal_records AS wal_records,
+            pgss.wal_bytes AS wal_bytes,
+            pgss.shared_blk_read_time AS blk_read_time,
+            pgss.shared_blk_write_time AS blk_write_time
+          FROM pg_stat_statements AS pgss
+          LEFT JOIN pg_roles ON pgss.userid = pg_roles.oid
+          LEFT JOIN pg_database ON pgss.dbid = pg_database.oid
+          WHERE pgss.queryid IS NOT NULL
+            AND pgss.query NOT ILIKE '%pg_stat_statements%'
+            AND pgss.query NOT ILIKE '%pg_catalog%'
+            AND pgss.query NOT ILIKE 'EXPLAIN%'
+            AND pgss.query NOT ILIKE 'PREPARE otel_%'
+            AND pgss.query NOT ILIKE 'CREATE %'
+          ORDER BY pgss.total_exec_time DESC
+          LIMIT 250
+        metrics: *stmt_metrics
+
+  sqlquery/pg_statements_postgres_v11_12:
+    driver: postgres
+    datasource: "host=${env:PG_HOST} port=${env:PG_PORT} user=${env:PG_USER} password=${env:PG_PASSWORD} dbname=${env:PG_DBNAME} sslmode=${env:PG_SSLMODE}"
+    collection_interval: 60s
+    max_open_conn: 2
+    queries:
+      - sql: |
+          SELECT
+            pgss.queryid::text AS query_id,
+            LEFT(pgss.query, 500) AS query_text,
+            COALESCE(pg_database.datname, 'unknown') AS database_name,
+            COALESCE(pg_roles.rolname, 'unknown') AS role_name,
+            pgss.calls AS calls,
+            pgss.total_time AS total_exec_time,
+            pgss.mean_time AS mean_exec_time,
+            pgss.min_time AS min_exec_time,
+            pgss.max_time AS max_exec_time,
+            pgss.stddev_time AS stddev_exec_time,
+            pgss.rows AS rows,
+            pgss.shared_blks_hit AS shared_blks_hit,
+            pgss.shared_blks_read AS shared_blks_read,
+            pgss.shared_blks_dirtied AS shared_blks_dirtied,
+            pgss.shared_blks_written AS shared_blks_written,
+            pgss.temp_blks_read AS temp_blks_read,
+            pgss.temp_blks_written AS temp_blks_written,
+            0::bigint AS wal_records,
+            0::numeric AS wal_bytes,
+            pgss.blk_read_time AS blk_read_time,
+            pgss.blk_write_time AS blk_write_time
+          FROM pg_stat_statements AS pgss
+          LEFT JOIN pg_roles ON pgss.userid = pg_roles.oid
+          LEFT JOIN pg_database ON pgss.dbid = pg_database.oid
+          WHERE pgss.queryid IS NOT NULL
+            AND pgss.query NOT ILIKE '%pg_stat_statements%'
+            AND pgss.query NOT ILIKE '%pg_catalog%'
+            AND pgss.query NOT ILIKE 'EXPLAIN%'
+            AND pgss.query NOT ILIKE 'PREPARE otel_%'
+            AND pgss.query NOT ILIKE 'CREATE %'
+          ORDER BY pgss.total_time DESC
+          LIMIT 250
+        metrics: *stmt_metrics
+
+service:
+  extensions: [health_check]
+  telemetry:
+    logs:
+      level: ${env:OTEL_LOG_LEVEL}
+  pipelines:
+    metrics/postgres_statements:
+      receivers: [sqlquery/pg_statements_postgres_v13_16]
+      processors: [memory_limiter, resource, batch]
+      exporters: [otlphttp/backend]
+```
+
+</Expandable>
+
+Run the collector after you save `otel-collector.yaml`:
+
+```bash
+otelcol-contrib --config otel-collector.yaml
+```
+
+Or run it through Docker:
+
+```bash
+docker run --rm \
+  --env-file .env \
+  -v "$(pwd)/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro" \
+  otel/opentelemetry-collector-contrib:<version> \
+  --config /etc/otelcol-contrib/config.yaml
+```
+
+<Warning>
+  `query_text` is a high-cardinality metric attribute. Keep it during onboarding if you need to inspect query fingerprints. Remove it from each `attribute_columns` list if you need lower cardinality.
+</Warning>
+  </Tab>
+
+  <Tab title="MySQL">
+    <Steps>
+      <Step title="Create the monitoring user">
+        Connect as a MySQL user with grant privileges and run:
+
+        ```sql
+        CREATE USER 'querycomment'@'%' IDENTIFIED BY 'replace-with-strong-password';
+        GRANT SELECT, PROCESS, REPLICATION CLIENT ON *.* TO 'querycomment'@'%';
+        FLUSH PRIVILEGES;
+        ```
+
+        `PROCESS` lets the OTel agent inspect thread state and InnoDB status. `REPLICATION CLIENT` lets it read replication status when replicas are present.
+
+        <Note>
+          Replace `'%'` with the OTel agent host or subnet if you want to restrict where the monitoring user can connect from.
+        </Note>
+      </Step>
+
+      <Step title="Verify performance_schema">
+        QueryComment uses `performance_schema.events_statements_summary_by_digest` for normalized query statistics.
+
+        Confirm that `performance_schema` is enabled:
+
+        ```sql
+        SHOW VARIABLES LIKE 'performance_schema';
+        ```
+
+        Confirm that statement digests are being collected:
+
+        ```sql
+        SELECT NAME, ENABLED
+        FROM performance_schema.setup_consumers
+        WHERE NAME = 'statements_digest';
+        ```
+
+        If the consumer is disabled, enable it as an admin user:
+
+        ```sql
+        UPDATE performance_schema.setup_consumers
+        SET ENABLED = 'YES'
+        WHERE NAME = 'statements_digest';
+        ```
+      </Step>
+
+      <Step title="Verify access">
+        Confirm the monitoring user has the required grants and that digest rows exist:
+
+        ```sql
+        SHOW GRANTS FOR 'querycomment'@'%';
+
+        SELECT COUNT(*)
+        FROM performance_schema.events_statements_summary_by_digest;
+        ```
+
+        If the digest table is empty, run a representative workload against the database and check again.
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>

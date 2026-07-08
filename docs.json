@@ -7,10 +7,10 @@
     "light": "#11161e",
     "dark": "#cfd0d2"
   },
-  "favicon": "https://media.brand.dev/2b01fe20-c04b-4a1d-a2f9-1d2789c50a7a.jpg",
+  "favicon": "/images/querycomment-icon.svg",
   "logo": {
-    "light": "https://media.brand.dev/5ffd6ce4-2434-4b4b-920a-f8cacac8b48b.svg",
-    "dark": "https://media.brand.dev/5ffd6ce4-2434-4b4b-920a-f8cacac8b48b.svg"
+    "light": "/images/querycomment-icon.svg",
+    "dark": "/images/querycomment-icon.svg"
   },
   "navbar": {
     "links": [
@@ -33,46 +33,7 @@
           {
             "group": "Get Started",
             "pages": [
-              "introduction",
-              "quickstart",
-              "how-it-works"
-            ]
-          },
-          {
-            "group": "Core Concepts",
-            "pages": [
-              "concepts/three-layer-observability",
-              "concepts/drift-detection",
-              "concepts/cross-layer-correlation",
-              "concepts/query-fingerprinting"
-            ]
-          },
-          {
-            "group": "Database Support",
-            "pages": [
-              "databases/postgresql",
-              "databases/mysql",
-              "databases/supabase",
-              "databases/neon",
-              "databases/aurora",
-              "databases/planetscale",
-              "databases/rds-mysql",
-              "databases/cloud-sql"
-            ]
-          },
-          {
-            "group": "Use Cases",
-            "pages": [
-              "use-cases/saas",
-              "use-cases/fintech",
-              "use-cases/ecommerce"
-            ]
-          },
-          {
-            "group": "Help",
-            "pages": [
-              "faq",
-              "troubleshooting"
+              "quickstart"
             ]
           }
         ]
@@ -81,7 +42,6 @@
   },
   "footer": {
     "socials": {
-      "github": "https://github.com/querycomment",
       "linkedin": "https://linkedin.com/company/querycomment"
     }
   }
