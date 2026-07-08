@@ -173,7 +173,7 @@ processors:
         host.id: { enabled: true }
         os.type: { enabled: true }
 
-  resource:
+  resource/postgres:
     attributes:
       - key: db.system
         value: postgresql
@@ -368,7 +368,7 @@ service:
   pipelines:
     metrics/postgres:
       receivers: [postgresql, sqlquery/pg_statements_postgres_v13_16]
-      processors: [memory_limiter, resourcedetection, resource, batch]
+      processors: [memory_limiter, resourcedetection, resource/postgres, batch]
       exporters: [otlp/querycomment]
 ```
 
