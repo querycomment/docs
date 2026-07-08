@@ -85,7 +85,7 @@ Choose the tab for the database you want to connect.
 
 ### Configure the OTel receiver
 
-Use the [`otelcol-contrib` package](https://github.com/open-telemetry/opentelemetry-collector-releases/tree/main/distributions/otelcol-contrib) with the [`sqlquery` receiver](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/receiver/sqlqueryreceiver) to collect PostgreSQL statement metrics from `pg_stat_statements`.
+Use the [`otelcol-contrib` package](https://github.com/open-telemetry/opentelemetry-collector-releases/tree/main/distributions/otelcol-contrib) with the built-in `postgresql` receiver and the [`sqlquery` receiver](https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/receiver/sqlqueryreceiver). The `postgresql` receiver collects instance metrics. The `sqlquery` receiver collects statement metrics from `pg_stat_statements`.
 
 The collector config includes receivers for PostgreSQL 11-12, 13-16, and 17+. Choose the receiver that matches your PostgreSQL major version in `service.pipelines.metrics/postgres_statements.receivers`.
 
@@ -105,8 +105,10 @@ PostgreSQL 13-16 is the default:
 service:
   pipelines:
     metrics/postgres_statements:
-      receivers: [sqlquery/pg_statements_postgres_v13_16]
+      receivers: [postgresql, sqlquery/pg_statements_postgres_v13_16]
 ```
+
+Keep `postgresql` in the receivers list. Change only the `sqlquery/...` receiver for your PostgreSQL version.
 
 The version-specific query fields are:
 
@@ -209,10 +211,22 @@ exporters:
     verbosity: normal
 
 receivers:
+  postgresql:
+    endpoint: ${env:PG_HOST}:${env:PG_PORT}
+    transport: tcp
+    username: ${env:PG_USER}
+    password: ${env:PG_PASSWORD}
+    databases: []
+    # exclude_databases: [postgres, template0, template1]
+    collection_interval: 15s
+    tls:
+      insecure: false
+      insecure_skip_verify: false
+
   sqlquery/pg_statements_postgres_v13_16:
     driver: postgres
     datasource: "host=${env:PG_HOST} port=${env:PG_PORT} user=${env:PG_USER} password=${env:PG_PASSWORD} dbname=${env:PG_DBNAME} sslmode=${env:PG_SSLMODE}"
-    collection_interval: 60s
+    collection_interval: 15s
     max_open_conn: 2
     queries:
       - sql: |
@@ -271,7 +285,7 @@ receivers:
   sqlquery/pg_statements_postgres_v17_plus:
     driver: postgres
     datasource: "host=${env:PG_HOST} port=${env:PG_PORT} user=${env:PG_USER} password=${env:PG_PASSWORD} dbname=${env:PG_DBNAME} sslmode=${env:PG_SSLMODE}"
-    collection_interval: 60s
+    collection_interval: 15s
     max_open_conn: 2
     queries:
       - sql: |
@@ -313,7 +327,7 @@ receivers:
   sqlquery/pg_statements_postgres_v11_12:
     driver: postgres
     datasource: "host=${env:PG_HOST} port=${env:PG_PORT} user=${env:PG_USER} password=${env:PG_PASSWORD} dbname=${env:PG_DBNAME} sslmode=${env:PG_SSLMODE}"
-    collection_interval: 60s
+    collection_interval: 15s
     max_open_conn: 2
     queries:
       - sql: |
@@ -359,7 +373,7 @@ service:
       level: ${env:OTEL_LOG_LEVEL}
   pipelines:
     metrics/postgres_statements:
-      receivers: [sqlquery/pg_statements_postgres_v13_16]
+      receivers: [postgresql, sqlquery/pg_statements_postgres_v13_16]
       processors: [memory_limiter, resource, batch]
       exporters: [otlphttp/backend]
 ```
