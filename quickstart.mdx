@@ -14,7 +14,7 @@ Connect your first database by creating a dedicated monitoring user, enabling th
 
 Before you start, make sure you have:
 
-- A QueryComment API ingest from your dashboard
+- A QueryComment ingest token from your dashboard
 - Permission to create a monitoring user and grant monitoring privileges
 - Outbound HTTPS access from the OTel agent host to `ingest.querycomment.com`
 
@@ -31,7 +31,7 @@ Choose the tab for the database you want to connect.
   <Tab title="PostgreSQL">
     <Steps>
       <Step title="Enable pg_stat_statements">
-        QueryComment uses `pg_stat_statements` to read normalized query statistics.
+        QueryComment uses `pg_stat_statements` to read aggregate statement statistics keyed by `queryid`.
 
         Check whether it is already loaded:
 
@@ -39,10 +39,11 @@ Choose the tab for the database you want to connect.
         SHOW shared_preload_libraries;
         ```
 
-        If `pg_stat_statements` is not listed, add it to `postgresql.conf` or your managed database parameter group:
+        If `pg_stat_statements` is not listed, add it to `postgresql.conf` or your managed database parameter group. Also disable utility statement tracking:
 
         ```ini
         shared_preload_libraries = 'pg_stat_statements'
+        pg_stat_statements.track_utility = off
         ```
 
         Restart PostgreSQL, then create the extension in the database you want to monitor:
@@ -65,7 +66,7 @@ Choose the tab for the database you want to connect.
         GRANT pg_read_all_stats TO querycomment;
         ```
 
-        `pg_monitor` gives the OTel agent read access to PostgreSQL monitoring views. `pg_read_all_stats` lets the receiver read `queryid` and query text for statements run by other roles.
+        `pg_monitor` gives the OTel agent read access to PostgreSQL monitoring views. `pg_read_all_stats` lets the receiver read `queryid` and statement statistics for statements run by other roles.
       </Step>
 
       <Step title="Verify access">
@@ -73,7 +74,7 @@ Choose the tab for the database you want to connect.
 
         ```sql
         SET ROLE querycomment;
-        SELECT calls, query
+        SELECT queryid, calls, query
         FROM pg_stat_statements
         LIMIT 5;
         RESET ROLE;
@@ -129,7 +130,7 @@ Set these environment variables before starting `otelcol-contrib`:
 | `PG_DBNAME` | Database to connect to. Use a database where `pg_stat_statements` is installed. |
 | `PG_SSLMODE` | PostgreSQL SSL mode, such as `require`, `verify-full`, or `disable`. |
 | `QC_ENDPOINT` | Optional QueryComment ingest endpoint. Defaults to `ingest.querycomment.com:443`. |
-| `QC_INGEST_TOKEN` | QueryComment API ingest value from your dashboard. |
+| `QC_INGEST_TOKEN` | QueryComment ingest token from your dashboard. |
 | `PG_CLUSTER_NAME` | Cluster name to attach to exported metrics. |
 | `OTEL_ENVIRONMENT` | Deployment environment. Defaults to `production` if omitted. |
 
@@ -143,7 +144,7 @@ PG_PASSWORD=replace-with-strong-password
 PG_DBNAME=app
 PG_SSLMODE=require
 
-QC_INGEST_TOKEN=replace-with-querycomment-api-ingest
+QC_INGEST_TOKEN=replace-with-querycomment-ingest-token
 PG_CLUSTER_NAME=production-postgres
 OTEL_ENVIRONMENT=production
 ```
@@ -198,7 +199,7 @@ exporters:
       enabled: true
       initial_interval: 5s
       max_interval: 30s
-      max_elapsed_time: 300s
+      max_elapsed_time: 60s
     sending_queue:
       enabled: true
       num_consumers: 4
@@ -248,7 +249,7 @@ receivers:
       - sql: |
           SELECT
             pgss.queryid::text AS query_id,
-            LEFT(pgss.query, 500) AS query_text,
+            pgss.queryid::text AS query_text,
             COALESCE(pg_database.datname, 'unknown') AS database_name,
             COALESCE(pg_roles.rolname, 'unknown') AS role_name,
             pgss.calls AS calls,
@@ -277,6 +278,13 @@ receivers:
             AND pgss.query NOT ILIKE 'EXPLAIN%'
             AND pgss.query NOT ILIKE 'PREPARE otel_%'
             AND pgss.query NOT ILIKE 'CREATE %'
+            AND pgss.query NOT ILIKE 'ALTER %'
+            AND pgss.query NOT ILIKE 'DROP %'
+            AND pgss.query NOT ILIKE 'GRANT %'
+            AND pgss.query NOT ILIKE 'REVOKE %'
+            AND pgss.query NOT ILIKE 'DO %'
+            AND pgss.query NOT ILIKE 'CALL %'
+            AND pgss.query !~* '\m(password|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)\M'
           ORDER BY pgss.total_exec_time DESC
           LIMIT 250
         metrics: &stmt_metrics
@@ -307,7 +315,7 @@ receivers:
       - sql: |
           SELECT
             pgss.queryid::text AS query_id,
-            LEFT(pgss.query, 500) AS query_text,
+            pgss.queryid::text AS query_text,
             COALESCE(pg_database.datname, 'unknown') AS database_name,
             COALESCE(pg_roles.rolname, 'unknown') AS role_name,
             pgss.calls AS calls,
@@ -336,6 +344,13 @@ receivers:
             AND pgss.query NOT ILIKE 'EXPLAIN%'
             AND pgss.query NOT ILIKE 'PREPARE otel_%'
             AND pgss.query NOT ILIKE 'CREATE %'
+            AND pgss.query NOT ILIKE 'ALTER %'
+            AND pgss.query NOT ILIKE 'DROP %'
+            AND pgss.query NOT ILIKE 'GRANT %'
+            AND pgss.query NOT ILIKE 'REVOKE %'
+            AND pgss.query NOT ILIKE 'DO %'
+            AND pgss.query NOT ILIKE 'CALL %'
+            AND pgss.query !~* '\m(password|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)\M'
           ORDER BY pgss.total_exec_time DESC
           LIMIT 250
         metrics: *stmt_metrics
@@ -349,7 +364,7 @@ receivers:
       - sql: |
           SELECT
             pgss.queryid::text AS query_id,
-            LEFT(pgss.query, 500) AS query_text,
+            pgss.queryid::text AS query_text,
             COALESCE(pg_database.datname, 'unknown') AS database_name,
             COALESCE(pg_roles.rolname, 'unknown') AS role_name,
             pgss.calls AS calls,
@@ -378,6 +393,13 @@ receivers:
             AND pgss.query NOT ILIKE 'EXPLAIN%'
             AND pgss.query NOT ILIKE 'PREPARE otel_%'
             AND pgss.query NOT ILIKE 'CREATE %'
+            AND pgss.query NOT ILIKE 'ALTER %'
+            AND pgss.query NOT ILIKE 'DROP %'
+            AND pgss.query NOT ILIKE 'GRANT %'
+            AND pgss.query NOT ILIKE 'REVOKE %'
+            AND pgss.query NOT ILIKE 'DO %'
+            AND pgss.query NOT ILIKE 'CALL %'
+            AND pgss.query !~* '\m(password|secret|token|api[_-]?key|access[_-]?key|private[_-]?key)\M'
           ORDER BY pgss.total_time DESC
           LIMIT 250
         metrics: *stmt_metrics
