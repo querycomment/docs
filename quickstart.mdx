@@ -128,7 +128,7 @@ Set these environment variables before starting `otelcol-contrib`:
 | `PG_PASSWORD` | Monitoring user password. |
 | `PG_DBNAME` | Database to connect to. Use a database where `pg_stat_statements` is installed. |
 | `PG_SSLMODE` | PostgreSQL SSL mode, such as `require`, `verify-full`, or `disable`. |
-| `QC_ENDPOINT` | QueryComment ingest endpoint, for example `ingest.querycomment.com:4317`. |
+| `QC_ENDPOINT` | QueryComment ingest endpoint, for example `ingest.querycomment.com:443`. |
 | `QC_INGEST_TOKEN` | QueryComment API ingest value from your dashboard. |
 | `PG_CLUSTER_NAME` | Cluster name to attach to exported metrics. |
 | `OTEL_ENVIRONMENT` | Deployment environment. Defaults to `production` if omitted. |
@@ -143,7 +143,7 @@ PG_PASSWORD=replace-with-strong-password
 PG_DBNAME=app
 PG_SSLMODE=require
 
-QC_ENDPOINT=ingest.querycomment.com:4317
+QC_ENDPOINT=ingest.querycomment.com:443
 QC_INGEST_TOKEN=replace-with-querycomment-api-ingest
 PG_CLUSTER_NAME=production-postgres
 OTEL_ENVIRONMENT=production
