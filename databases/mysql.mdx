@@ -1,0 +1,70 @@
+---
+title: "Connect MySQL"
+sidebarTitle: "MySQL"
+description: "Connect MySQL to QueryComment with performance_schema and a read-only monitoring user."
+---
+
+Connect MySQL by creating a monitoring user and confirming that `performance_schema` captures statement digests.
+
+## Prepare MySQL
+
+<Steps>
+  <Step title="Create the monitoring user">
+    Connect as a MySQL user with grant privileges and run:
+
+    ```sql
+    CREATE USER 'querycomment'@'%' IDENTIFIED BY 'replace-with-strong-password';
+    GRANT SELECT, PROCESS, REPLICATION CLIENT ON *.* TO 'querycomment'@'%';
+    FLUSH PRIVILEGES;
+    ```
+
+    `PROCESS` lets the collector inspect thread state and InnoDB status. `REPLICATION CLIENT` lets it read replication status when replicas are present.
+
+    <Note>
+      Replace `'%'` with the collector host or subnet when you want to restrict where the monitoring user can connect from.
+    </Note>
+  </Step>
+
+  <Step title="Enable statement digests">
+    QueryComment uses `performance_schema.events_statements_summary_by_digest` for normalized query statistics.
+
+    Confirm that `performance_schema` is enabled:
+
+    ```sql
+    SHOW VARIABLES LIKE 'performance_schema';
+    ```
+
+    Confirm that statement digests are being collected:
+
+    ```sql
+    SELECT NAME, ENABLED
+    FROM performance_schema.setup_consumers
+    WHERE NAME = 'statements_digest';
+    ```
+
+    If the consumer is disabled, enable it as an administrator:
+
+    ```sql
+    UPDATE performance_schema.setup_consumers
+    SET ENABLED = 'YES'
+    WHERE NAME = 'statements_digest';
+    ```
+  </Step>
+
+  <Step title="Verify access">
+    Confirm the monitoring user has the required grants and that digest rows exist:
+
+    ```sql
+    SHOW GRANTS FOR 'querycomment'@'%';
+
+    SELECT COUNT(*)
+    FROM performance_schema.events_statements_summary_by_digest;
+    ```
+
+    If the digest table is empty, run a representative workload against the database and check again.
+  </Step>
+</Steps>
+
+## Collector connection values
+
+Configure the collector with the MySQL host, port, monitoring user, password, and database. Use port `3306` unless your instance uses a different port. Keep the password in a secret or environment variable rather than in the collector configuration file.

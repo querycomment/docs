@@ -1,0 +1,22 @@
+---
+title: "Connect SQL Server"
+sidebarTitle: "Overview"
+description: "Choose the SQL Server deployment you want to connect to QueryComment."
+---
+
+QueryComment reads completed statement statistics from the SQL Server plan cache. It uses `sys.dm_exec_query_stats`, `sys.dm_exec_sql_text`, and, outside Azure SQL Database, `sys.dm_exec_plan_attributes`.
+
+QueryComment does not require Query Store.
+
+## Choose your deployment
+
+<CardGroup cols={2}>
+  <Card title="Self-hosted SQL Server" icon="server" href="/databases/sql-server/self-hosted">
+    Connect SQL Server running on your own infrastructure.
+  </Card>
+  <Card title="Azure SQL" icon="cloud" href="/databases/sql-server/azure">
+    Connect Azure SQL Database or Azure SQL Managed Instance.
+  </Card>
+</CardGroup>
+
+After granting access, use the [production collector configuration](/databases/sql-server/collector).

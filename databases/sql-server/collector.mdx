@@ -1,0 +1,120 @@
+---
+title: "Configure the SQL Server collector"
+sidebarTitle: "Collector configuration"
+description: "Configure the production QueryComment collector for SQL Server."
+---
+
+Use the production [`sqlserver.yaml`](https://github.com/querycomment/collector/blob/main/config/sqlserver.yaml) after you [grant collector access](/databases/sql-server).
+
+## Environment variables
+
+Set the following environment variables before starting the collector:
+
+```bash
+SQLSERVER_DATASOURCE="sqlserver://querycomment:replace-with-strong-password@sqlserver.example.com:1433?database=app&encrypt=true"
+QC_DATABASE_NAME=production-sqlserver
+QC_INGEST_TOKEN=replace-with-querycomment-ingest-token
+OTEL_ENVIRONMENT=production
+```
+
+URL-encode special characters in the username or password in `SQLSERVER_DATASOURCE`. Use port `1433` unless your instance uses a different port.
+
+<Expandable title="sqlserver.yaml">
+
+```yaml
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  host_metrics:
+    collection_interval: 30s
+    scrapers:
+      cpu: {}
+      load: {}
+      memory: {}
+      paging: {}
+      processes: {}
+      system: {}
+      disk: {}
+      filesystem:
+        exclude_fs_types:
+          fs_types: [nfs, nfs4, cifs, smb3]
+          match_type: strict
+      network:
+        metrics:
+          system.network.connections:
+            enabled: false
+
+  sqlserver:
+    datasource: ${env:SQLSERVER_DATASOURCE}
+    collection_interval: 60s
+    query_metrics:
+      enabled: ${env:QC_QUERY_METRICS_ENABLED:-true}
+      limit: ${env:QC_QUERY_METRICS_LIMIT:-250}
+      candidate_limit: ${env:QC_QUERY_METRICS_CANDIDATE_LIMIT:-1000}
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 80
+    spike_limit_percentage: 25
+  resource_detection:
+    detectors: [env, system]
+    timeout: 5s
+    override: true
+    system:
+      hostname_sources: [dns, os]
+  resource/database:
+    attributes:
+      - key: qc_agent_version
+        value: ${env:QC_AGENT_VERSION:-0.1.1}
+        action: insert
+      - key: db.system
+        value: ${env:QC_DB_SYSTEM:-sqlserver}
+        action: upsert
+      - key: service.name
+        value: ${env:QC_DATABASE_NAME}
+        action: upsert
+      - key: deployment.environment
+        value: ${env:OTEL_ENVIRONMENT:-production}
+        action: upsert
+  batch:
+    send_batch_size: 8192
+    send_batch_max_size: 10000
+    timeout: 5s
+
+exporters:
+  otlp_grpc/querycomment:
+    endpoint: ${env:QC_ENDPOINT:-ingest.querycomment.com:443}
+    tls:
+      insecure: ${env:QC_ENDPOINT_INSECURE:-false}
+    headers:
+      authorization: Bearer ${env:QC_INGEST_TOKEN}
+    compression: gzip
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 60s
+    sending_queue:
+      enabled: true
+      num_consumers: 4
+      queue_size: 5000
+
+service:
+  extensions: [health_check]
+  pipelines:
+    metrics:
+      receivers: [host_metrics, sqlserver]
+      processors: [memory_limiter, resource_detection, resource/database, batch]
+      exporters: [otlp_grpc/querycomment]
+```
+
+</Expandable>
+
+The collector checks for recently completed statements every `60s`. It emits up to `250` statement fingerprints from a candidate set of up to `1000`. Set `QC_QUERY_METRICS_ENABLED=false` only when you need to disable statement metrics temporarily.
+
+<Warning>
+  For self-hosted SQL Server, run the collector on the database host when you need host CPU, memory, disk, and network metrics to describe that instance. For Azure SQL Database, host metrics describe the collector host, not the managed database service.
+</Warning>

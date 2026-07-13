@@ -1,0 +1,45 @@
+---
+title: "Connect self-hosted SQL Server"
+sidebarTitle: "Self-hosted setup"
+description: "Grant QueryComment read-only access to a self-hosted SQL Server instance."
+---
+
+Use this setup for SQL Server running on your own infrastructure.
+
+## Grant collector access
+
+Run the following as a server administrator:
+
+```sql
+USE master;
+CREATE LOGIN querycomment WITH PASSWORD = 'replace-with-strong-password';
+CREATE USER querycomment FOR LOGIN querycomment;
+
+GRANT CONNECT ANY DATABASE TO querycomment;
+GRANT VIEW SERVER STATE TO querycomment;
+GRANT VIEW ANY DEFINITION TO querycomment;
+```
+
+For SQL Server 2022 and later, you can grant `VIEW SERVER PERFORMANCE STATE` instead of `VIEW SERVER STATE`. The collector requires one of these server-state permissions to read statement statistics and query text.
+
+## Verify permissions
+
+Connect with the `querycomment` login to a monitored database, then run:
+
+```sql
+SELECT TOP (1)
+  query_hash,
+  execution_count,
+  total_elapsed_time
+FROM sys.dm_exec_query_stats;
+
+SELECT TOP (1) sql_text.text
+FROM sys.dm_exec_query_stats AS query_stats
+CROSS APPLY sys.dm_exec_sql_text(query_stats.sql_handle) AS sql_text;
+```
+
+The first query confirms access to cached statement statistics. The second confirms access to query text. Either query can return no rows on an idle instance. Run representative application traffic, then check again.
+
+## Configure the collector
+
+Continue to [configure the SQL Server collector](/databases/sql-server/collector).

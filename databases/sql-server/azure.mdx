@@ -1,0 +1,63 @@
+---
+title: "Connect Azure SQL"
+sidebarTitle: "Azure setup"
+description: "Grant QueryComment read-only access to Azure SQL Database or Azure SQL Managed Instance."
+---
+
+Use the section that matches your Azure SQL deployment.
+
+## Azure SQL Database
+
+Run the following as the Azure SQL server administrator. Create the login in the virtual `master` database, then create a user in every application database you monitor:
+
+```sql
+-- Run in virtual master.
+CREATE LOGIN querycomment WITH PASSWORD = 'replace-with-strong-password';
+ALTER SERVER ROLE ##MS_ServerStateReader## ADD MEMBER querycomment;
+ALTER SERVER ROLE ##MS_DefinitionReader## ADD MEMBER querycomment;
+
+-- Run in each application database.
+CREATE USER querycomment FOR LOGIN querycomment;
+```
+
+The collector connects to each Azure SQL Database separately. Do not configure `master` or other system databases as monitored databases.
+
+<Note>
+  On service objectives other than Basic, S0, S1, and elastic pools, you can grant `VIEW DATABASE STATE` to the database user instead of adding the login to `##MS_ServerStateReader##`. Use the server role for a consistent setup across Azure SQL Database service objectives.
+</Note>
+
+## Azure SQL Managed Instance
+
+Run the following as a server administrator:
+
+```sql
+USE master;
+CREATE LOGIN querycomment WITH PASSWORD = 'replace-with-strong-password';
+CREATE USER querycomment FOR LOGIN querycomment;
+
+GRANT CONNECT ANY DATABASE TO querycomment;
+GRANT VIEW SERVER STATE TO querycomment;
+GRANT VIEW ANY DEFINITION TO querycomment;
+```
+
+## Verify permissions
+
+Connect with the `querycomment` login to a monitored database, then run:
+
+```sql
+SELECT TOP (1)
+  query_hash,
+  execution_count,
+  total_elapsed_time
+FROM sys.dm_exec_query_stats;
+
+SELECT TOP (1) sql_text.text
+FROM sys.dm_exec_query_stats AS query_stats
+CROSS APPLY sys.dm_exec_sql_text(query_stats.sql_handle) AS sql_text;
+```
+
+The first query confirms access to cached statement statistics. The second confirms access to query text. Either query can return no rows on an idle instance. Run representative application traffic, then check again.
+
+## Configure the collector
+
+Continue to [configure the SQL Server collector](/databases/sql-server/collector).

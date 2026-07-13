@@ -26,14 +26,25 @@
     }
   },
   "navigation": {
-    "tabs": [
+    "groups": [
       {
-        "tab": "Documentation",
-        "groups": [
+        "group": "Get started",
+        "pages": [
+          "quickstart"
+        ]
+      },
+      {
+        "group": "Databases",
+        "pages": [
+          "databases/postgresql",
+          "databases/mysql",
           {
-            "group": "Get Started",
+            "group": "SQL Server",
             "pages": [
-              "quickstart"
+              "databases/sql-server",
+              "databases/sql-server/self-hosted",
+              "databases/sql-server/azure",
+              "databases/sql-server/collector"
             ]
           }
         ]
