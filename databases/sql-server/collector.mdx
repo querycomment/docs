@@ -116,5 +116,5 @@ service:
 The collector checks for recently completed statements every `60s`. It emits up to `250` statement fingerprints from a candidate set of up to `1000`. Set `QC_QUERY_METRICS_ENABLED=false` only when you need to disable statement metrics temporarily.
 
 <Warning>
-  For self-hosted SQL Server, run the collector on the database host when you need host CPU, memory, disk, and network metrics to describe that instance. For Azure SQL Database, host metrics describe the collector host, not the managed database service.
+  For self-hosted SQL Server, include `host_metrics` only when the collector runs on the database host. For Azure SQL Database, remove the `host_metrics` receiver and remove `host_metrics` from `service.pipelines.metrics.receivers`.
 </Warning>
