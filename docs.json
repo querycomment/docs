@@ -13,12 +13,6 @@
     "dark": "/images/querycomment-icon.svg"
   },
   "navbar": {
-    "links": [
-      {
-        "label": "Get Early Access",
-        "href": "https://querycomment.com"
-      }
-    ],
     "primary": {
       "type": "button",
       "label": "Get Early Access",
