@@ -4,7 +4,7 @@ sidebarTitle: "Collector configuration"
 description: "Configure the production QueryComment collector for SQL Server."
 ---
 
-Use the production [`sqlserver.yaml`](https://github.com/querycomment/collector/blob/main/config/sqlserver.yaml) after you [grant collector access](/databases/sql-server).
+Use the [QueryComment collector](https://github.com/querycomment/collector/releases/tag/v0.1.2) with the bundled SQL Server receiver after you [grant collector access](/databases/sql-server). The collector is available as the [`ghcr.io/querycomment/collector:0.1.2`](https://github.com/querycomment/collector/pkgs/container/collector) Docker image or as a release package for your operating system.
 
 ## Environment variables
 
@@ -19,13 +19,33 @@ OTEL_ENVIRONMENT=production
 
 URL-encode special characters in the username or password in `SQLSERVER_DATASOURCE`. Use port `1433` unless your instance uses a different port.
 
+## Run the collector
+
+Run the collector with Docker:
+
+```bash
+docker run --rm \
+  --env-file .env \
+  ghcr.io/querycomment/collector:0.1.2 \
+  --config /etc/querycommentcol/sqlserver.yaml
+```
+
+Or choose the release package for your operating system and architecture. This example uses Linux amd64:
+
+```bash
+curl -L -o querycommentcol_0.1.2_linux_amd64.tar.gz \
+  https://github.com/querycomment/collector/releases/download/v0.1.2/querycommentcol_0.1.2_linux_amd64.tar.gz
+tar -xzf querycommentcol_0.1.2_linux_amd64.tar.gz
+cd querycommentcol_0.1.2_linux_amd64
+set -a
+. ../.env
+set +a
+./querycommentcol --config config/sqlserver.yaml
+```
+
 <Expandable title="sqlserver.yaml">
 
 ```yaml
-extensions:
-  health_check:
-    endpoint: 0.0.0.0:13133
-
 receivers:
   host_metrics:
     collection_interval: 30s
@@ -67,9 +87,6 @@ processors:
       hostname_sources: [dns, os]
   resource/database:
     attributes:
-      - key: qc_agent_version
-        value: ${env:QC_AGENT_VERSION:-0.1.1}
-        action: insert
       - key: db.system
         value: ${env:QC_DB_SYSTEM:-sqlserver}
         action: upsert
@@ -103,7 +120,6 @@ exporters:
       queue_size: 5000
 
 service:
-  extensions: [health_check]
   pipelines:
     metrics:
       receivers: [host_metrics, sqlserver]

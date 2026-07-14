@@ -4,7 +4,7 @@ sidebarTitle: "Quickstart"
 description: "Choose a supported database and connect it to QueryComment."
 ---
 
-Connect your database by creating a dedicated monitoring user, enabling its query-statistics source, and running the OpenTelemetry collector.
+Connect your database by creating a dedicated monitoring user, enabling its query-statistics source, and running the QueryComment collector.
 
 <Note>
   QueryComment reads aggregate query, engine, and infrastructure telemetry. The collector does not proxy application traffic and does not write to your application tables.
@@ -22,7 +22,7 @@ Make sure you have:
 
 <CardGroup cols={3}>
   <Card title="PostgreSQL" icon="database" href="/databases/postgresql">
-    Enable `pg_stat_statements`, then configure the PostgreSQL receiver.
+    Enable `pg_stat_statements`, then configure the QueryComment PostgreSQL receiver.
   </Card>
   <Card title="MySQL" icon="database" href="/databases/mysql">
     Enable statement digests in `performance_schema`.

@@ -4,7 +4,7 @@ sidebarTitle: "MySQL"
 description: "Connect MySQL to QueryComment with performance_schema and a read-only monitoring user."
 ---
 
-Connect MySQL by creating a monitoring user and confirming that `performance_schema` captures statement digests.
+Connect MySQL by creating a monitoring user, confirming that `performance_schema` captures statement digests, and running the QueryComment collector.
 
 ## Prepare MySQL
 
@@ -67,4 +67,56 @@ Connect MySQL by creating a monitoring user and confirming that `performance_sch
 
 ## Collector connection values
 
-Configure the collector with the MySQL host, port, monitoring user, password, and database. Use port `3306` unless your instance uses a different port. Keep the password in a secret or environment variable rather than in the collector configuration file.
+Use the [QueryComment collector](https://github.com/querycomment/collector/releases/tag/v0.1.2) with the bundled MySQL receiver. The collector is available as the [`ghcr.io/querycomment/collector:0.1.2`](https://github.com/querycomment/collector/pkgs/container/collector) Docker image or as a release package for your operating system.
+
+Set these environment variables before starting the collector:
+
+| Variable | Description |
+| --- | --- |
+| `MYSQL_HOST` | MySQL host name or IP address. |
+| `MYSQL_PORT` | MySQL port. Defaults to `3306` if omitted. |
+| `MYSQL_USER` | Monitoring user name. |
+| `MYSQL_PASSWORD` | Monitoring user password. |
+| `MYSQL_DATABASE` | Database to connect to. |
+| `MYSQL_TLS_INSECURE` | Optional. Set to `true` only when the connection should skip TLS. Defaults to `false`. |
+| `MYSQL_TLS_SKIP_VERIFY` | Optional. Set to `true` only when TLS certificate verification should be skipped. Defaults to `false`. |
+| `QC_ENDPOINT` | Optional QueryComment ingest endpoint. Defaults to `ingest.querycomment.com:443`. |
+| `QC_INGEST_TOKEN` | QueryComment ingest token from your dashboard. |
+| `QC_DATABASE_NAME` | Database or cluster name to attach to exported metrics. |
+| `OTEL_ENVIRONMENT` | Deployment environment. Defaults to `production` if omitted. |
+
+Example `.env` file:
+
+```bash
+MYSQL_HOST=db.example.com
+MYSQL_PORT=3306
+MYSQL_USER=querycomment
+MYSQL_PASSWORD=replace-with-strong-password
+MYSQL_DATABASE=app
+
+QC_INGEST_TOKEN=replace-with-querycomment-ingest-token
+QC_DATABASE_NAME=production-mysql
+OTEL_ENVIRONMENT=production
+```
+
+Run the collector with Docker:
+
+```bash
+docker run --rm \
+  --env-file .env \
+  ghcr.io/querycomment/collector:0.1.2 \
+  --config /etc/querycommentcol/mysql.yaml
+```
+
+Or choose the release package for your operating system and architecture. This example uses Linux amd64:
+
+```bash
+curl -L -o querycommentcol_0.1.2_linux_amd64.tar.gz \
+  https://github.com/querycomment/collector/releases/download/v0.1.2/querycommentcol_0.1.2_linux_amd64.tar.gz
+tar -xzf querycommentcol_0.1.2_linux_amd64.tar.gz
+cd querycommentcol_0.1.2_linux_amd64
+set -a
+. ../.env
+set +a
+./querycommentcol --config config/mysql.yaml
+```
