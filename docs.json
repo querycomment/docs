@@ -32,6 +32,7 @@
         "pages": [
           "databases/postgresql",
           "databases/mysql",
+          "databases/cosmos-db",
           {
             "group": "SQL Server",
             "pages": [

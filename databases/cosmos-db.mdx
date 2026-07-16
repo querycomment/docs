@@ -1,0 +1,391 @@
+---
+title: "Connect Azure Cosmos DB"
+sidebarTitle: "Azure Cosmos DB"
+description: "Route Azure Cosmos DB diagnostics through Event Hubs to QueryComment."
+---
+
+Connect Azure Cosmos DB accounts that use the API for NoSQL by sending per-request diagnostic records to a dedicated Event Hub and running the QueryComment Cosmos DB collector.
+
+<Note>
+  The collector does not connect to the Cosmos DB data endpoint and does not need a Cosmos DB account key. It consumes diagnostic records from Event Hubs and exports derived metrics to QueryComment.
+</Note>
+
+```text
+Azure Cosmos DB diagnostic setting
+  -> Azure Event Hubs
+  -> QueryComment Cosmos DB collector
+  -> QueryComment
+```
+
+## Before you start
+
+Make sure you have:
+
+- An Azure Cosmos DB account.
+- A QueryComment ingest token from your dashboard.
+- Permission to create an Event Hubs namespace, event hub, diagnostic setting, managed identity, and role assignment.
+- Permission to attach a user-assigned managed identity to the collector host.
+- A Linux collector host with Docker and the Azure CLI installed.
+- Outbound access from the collector host to the Event Hubs namespace and `ingest.querycomment.com:443`.
+
+The steps below connect one Cosmos DB account through one dedicated Event Hub. A collector instance can consume multiple Event Hubs when you configure a named receiver for each one.
+
+## Configure Azure
+
+<Steps>
+  <Step title="Set the resource names">
+    Sign in with the Azure CLI, then set values for your environment:
+
+    ```bash
+    set -euo pipefail
+
+    SUBSCRIPTION_ID="<subscription-id>"
+    RESOURCE_GROUP="<resource-group>"
+    LOCATION="<azure-region>"
+    COSMOS_ACCOUNT="<cosmos-account-name>"
+
+    EVENT_HUB_NAMESPACE="<globally-unique-event-hubs-namespace>"
+    EVENT_HUB_NAME="querycomment-cosmos-diagnostics"
+    DIAGNOSTIC_RULE="querycomment-cosmos-diagnostics"
+    DIAGNOSTIC_SETTING="querycomment-cosmos-queries"
+    IDENTITY_NAME="querycomment-cosmos-collector"
+    VM_NAME="<collector-vm-name>"
+
+    az account set --subscription "$SUBSCRIPTION_ID"
+    ```
+  </Step>
+
+  <Step title="Create the diagnostic Event Hub">
+    Create a Standard Event Hubs namespace and a dedicated event hub:
+
+    ```bash
+    az eventhubs namespace create \
+      --resource-group "$RESOURCE_GROUP" \
+      --name "$EVENT_HUB_NAMESPACE" \
+      --location "$LOCATION" \
+      --sku Standard \
+      --capacity 1 \
+      --enable-auto-inflate true \
+      --maximum-throughput-units 2 \
+      --minimum-tls-version 1.2 \
+      --public-network-access Enabled \
+      --disable-local-auth false \
+      --output none
+
+    az eventhubs eventhub create \
+      --resource-group "$RESOURCE_GROUP" \
+      --namespace-name "$EVENT_HUB_NAMESPACE" \
+      --name "$EVENT_HUB_NAME" \
+      --partition-count 2 \
+      --cleanup-policy Delete \
+      --retention-time-in-hours 24 \
+      --output none
+    ```
+
+    Create the namespace authorization rule Azure Monitor uses to deliver diagnostic records:
+
+    ```bash
+    az eventhubs namespace authorization-rule create \
+      --resource-group "$RESOURCE_GROUP" \
+      --namespace-name "$EVENT_HUB_NAMESPACE" \
+      --name "$DIAGNOSTIC_RULE" \
+      --rights Manage Send Listen \
+      --output none
+    ```
+
+    [Azure Monitor requires](https://learn.microsoft.com/azure/azure-monitor/platform/diagnostic-settings#destinations) this diagnostic-setting rule to have `Manage`, `Send`, and `Listen`. The collector does not use this rule.
+
+    <Note>
+      If you restrict Event Hubs networking, allow trusted Microsoft services to bypass the namespace firewall so Azure Monitor can deliver diagnostic records.
+    </Note>
+  </Step>
+
+  <Step title="Route Cosmos DB diagnostics">
+    Enable exactly `DataPlaneRequests` and `QueryRuntimeStatistics` on the Cosmos DB account:
+
+    ```bash
+    COSMOS_ID="$(az cosmosdb show \
+      --resource-group "$RESOURCE_GROUP" \
+      --name "$COSMOS_ACCOUNT" \
+      --query id \
+      --output tsv)"
+
+    DIAGNOSTIC_RULE_ID="$(az eventhubs namespace authorization-rule show \
+      --resource-group "$RESOURCE_GROUP" \
+      --namespace-name "$EVENT_HUB_NAMESPACE" \
+      --name "$DIAGNOSTIC_RULE" \
+      --query id \
+      --output tsv)"
+
+    az monitor diagnostic-settings create \
+      --name "$DIAGNOSTIC_SETTING" \
+      --resource "$COSMOS_ID" \
+      --event-hub "$EVENT_HUB_NAME" \
+      --event-hub-rule "$DIAGNOSTIC_RULE_ID" \
+      --logs '[
+        {"category":"DataPlaneRequests","enabled":true},
+        {"category":"QueryRuntimeStatistics","enabled":true}
+      ]' \
+      --output none
+    ```
+
+    Leave the Cosmos DB diagnostics full-text query feature disabled. `QueryRuntimeStatistics` keeps query text and parameters obfuscated by default, and the collector never exports the raw or correlated diagnostic records as logs.
+  </Step>
+
+  <Step title="Create the collector identity">
+    Create a user-assigned managed identity and grant it receiver access to only the dedicated Event Hub:
+
+    ```bash
+    az identity create \
+      --resource-group "$RESOURCE_GROUP" \
+      --name "$IDENTITY_NAME" \
+      --location "$LOCATION" \
+      --output none
+
+    IDENTITY_ID="$(az identity show \
+      --resource-group "$RESOURCE_GROUP" \
+      --name "$IDENTITY_NAME" \
+      --query id \
+      --output tsv)"
+
+    IDENTITY_CLIENT_ID="$(az identity show \
+      --resource-group "$RESOURCE_GROUP" \
+      --name "$IDENTITY_NAME" \
+      --query clientId \
+      --output tsv)"
+
+    IDENTITY_PRINCIPAL_ID="$(az identity show \
+      --resource-group "$RESOURCE_GROUP" \
+      --name "$IDENTITY_NAME" \
+      --query principalId \
+      --output tsv)"
+
+    EVENT_HUB_ID="$(az eventhubs eventhub show \
+      --resource-group "$RESOURCE_GROUP" \
+      --namespace-name "$EVENT_HUB_NAMESPACE" \
+      --name "$EVENT_HUB_NAME" \
+      --query id \
+      --output tsv)"
+
+    az role assignment create \
+      --assignee-object-id "$IDENTITY_PRINCIPAL_ID" \
+      --assignee-principal-type ServicePrincipal \
+      --role "Azure Event Hubs Data Receiver" \
+      --scope "$EVENT_HUB_ID" \
+      --output none
+    ```
+
+    The collector needs no role on the Cosmos DB account. Azure role assignments can take several minutes to propagate.
+  </Step>
+
+  <Step title="Attach the identity to the collector host">
+    Attach the identity to an existing Azure VM:
+
+    ```bash
+    az vm identity assign \
+      --resource-group "$RESOURCE_GROUP" \
+      --name "$VM_NAME" \
+      --identities "$IDENTITY_ID" \
+      --output none
+
+    printf 'AZURE_CLIENT_ID=%s\n' "$IDENTITY_CLIENT_ID"
+    ```
+
+    For another Azure compute service, attach the same user-assigned identity through that service's identity configuration.
+  </Step>
+</Steps>
+
+## Run the collector
+
+Use the [QueryComment Cosmos DB collector](https://github.com/querycomment/collector-cosmos/releases/tag/v0.1.0). The collector is available as the [`ghcr.io/querycomment/collector-cosmos:0.1.0`](https://github.com/querycomment/collector-cosmos/pkgs/container/collector-cosmos) Docker image.
+
+Set these environment variables on the collector host:
+
+| Variable | Description |
+| --- | --- |
+| `AZURE_CLIENT_ID` | Client ID of the user-assigned managed identity. |
+| `AZURE_EVENT_HUB_NAME` | Name of the dedicated Event Hub. |
+| `AZURE_EVENT_HUB_NAMESPACE` | Fully qualified Event Hubs namespace, such as `example.servicebus.windows.net`. |
+| `QC_DATABASE_NAME` | Cosmos DB account name displayed in QueryComment. |
+| `QC_INGEST_TOKEN` | QueryComment ingest token from your dashboard. |
+| `QC_ENDPOINT` | Optional QueryComment ingest endpoint. Defaults to `ingest.querycomment.com:443`. |
+| `QC_AGENT_VERSION` | Optional collector version attribute. Set it to the image version. |
+| `OTEL_ENVIRONMENT` | Deployment environment. Defaults to `production`. |
+
+Example `.env` file:
+
+```bash
+AZURE_CLIENT_ID=00000000-0000-0000-0000-000000000000
+AZURE_EVENT_HUB_NAME=querycomment-cosmos-diagnostics
+AZURE_EVENT_HUB_NAMESPACE=querycomment-production.servicebus.windows.net
+
+QC_DATABASE_NAME=orders-cosmos
+QC_INGEST_TOKEN=replace-with-querycomment-ingest-token
+QC_AGENT_VERSION=0.1.0
+OTEL_ENVIRONMENT=production
+```
+
+Restrict access to the environment file, then start the collector:
+
+```bash
+chmod 600 .env
+
+docker pull ghcr.io/querycomment/collector-cosmos:0.1.0
+docker run -d \
+  --name querycomment-cosmos-collector \
+  --restart unless-stopped \
+  --network host \
+  --env-file .env \
+  ghcr.io/querycomment/collector-cosmos:0.1.0 \
+  --config /etc/querycommentcol-cosmos/cosmosdb-managed-identity.yaml
+```
+
+Do not run more than one collector instance against the same Event Hub's `$Default` consumer group. One collector instance can consume multiple Event Hubs through named receivers.
+
+### Consume multiple Event Hubs
+
+The bundled managed identity configuration accepts one Event Hub through `AZURE_EVENT_HUB_NAME` and `AZURE_EVENT_HUB_NAMESPACE`. To consume multiple Event Hubs, start with `cosmosdb-managed-identity.yaml` and define a named receiver for each hub:
+
+<Expandable title="Multiple Event Hubs configuration">
+
+```yaml
+receivers:
+  azure_event_hub/orders:
+    event_hub:
+      name: ${env:AZURE_EVENT_HUB_NAME_ORDERS}
+      namespace: ${env:AZURE_EVENT_HUB_NAMESPACE_ORDERS}
+    auth: azure_auth
+    group: $Default
+    format: azure
+    apply_semantic_conventions: false
+    max_poll_events: 500
+    poll_rate: 5
+
+  azure_event_hub/catalog:
+    event_hub:
+      name: ${env:AZURE_EVENT_HUB_NAME_CATALOG}
+      namespace: ${env:AZURE_EVENT_HUB_NAMESPACE_CATALOG}
+    auth: azure_auth
+    group: $Default
+    format: azure
+    apply_semantic_conventions: false
+    max_poll_events: 500
+    poll_rate: 5
+
+processors:
+  resource/cosmosdb:
+    attributes:
+      - key: qc_agent_version
+        value: ${env:QC_AGENT_VERSION:-0.1.0}
+        action: insert
+      - key: db.system
+        value: cosmosdb
+        action: upsert
+      - key: service.name
+        value: ${env:QC_DATABASE_NAME}
+        action: insert
+      - key: deployment.environment
+        value: ${env:OTEL_ENVIRONMENT:-production}
+        action: upsert
+
+service:
+  pipelines:
+    logs/cosmosdb:
+      receivers: [azure_event_hub/orders, azure_event_hub/catalog]
+      processors: [memory_limiter]
+      exporters: [cosmosdb_query]
+```
+
+</Expandable>
+
+Keep the remaining extensions, processors, connector, exporter, and metrics pipeline from the bundled configuration. Changing the `service.name` action from `upsert` to `insert` preserves the Cosmos account name emitted by the connector while still labeling host metrics.
+
+Grant the collector identity `Azure Event Hubs Data Receiver` on every Event Hub it consumes. Correlation and series limits are shared across all configured receivers, so increase the optional capacity controls when the combined workload requires it. Separate collector instances remain useful when you need per-account failure or capacity isolation.
+
+## Verify the integration
+
+From the Azure provisioning shell, confirm the diagnostic setting and Event Hubs traffic:
+
+```bash
+az monitor diagnostic-settings show \
+  --name "$DIAGNOSTIC_SETTING" \
+  --resource "$COSMOS_ID" \
+  --output table
+
+EVENT_HUB_NAMESPACE_ID="$(az eventhubs namespace show \
+  --resource-group "$RESOURCE_GROUP" \
+  --name "$EVENT_HUB_NAMESPACE" \
+  --query id \
+  --output tsv)"
+
+az monitor metrics list \
+  --resource "$EVENT_HUB_NAMESPACE_ID" \
+  --metric IncomingMessages OutgoingMessages \
+  --interval PT1M \
+  --aggregation Total \
+  --output table
+```
+
+On the collector host, check the health endpoint and recent logs:
+
+```bash
+curl --fail http://127.0.0.1:13133/
+docker ps --filter name=querycomment-cosmos-collector
+docker logs --tail 100 querycomment-cosmos-collector
+```
+
+Run representative queries and create a few items in Cosmos DB. Diagnostic delivery can take several minutes. Then confirm Cosmos DB statements appear in QueryComment with calls, RU consumption, duration, request and response bytes, throttles, and server errors.
+
+## Collection behavior
+
+Cosmos DB writes query text to `QueryRuntimeStatistics` and request charge, duration, bytes, and status to `DataPlaneRequests`. The collector accepts either arrival order and correlates query records exactly by Azure resource ID and `ActivityId`.
+
+Successful `Document` creates with HTTP 201 are emitted immediately as `INSERT` statements. Query and insert records are aggregated in memory and emitted every 20 seconds as monotonic delta sums.
+
+| Metric | Description |
+| --- | --- |
+| `cosmosdb.stmt.calls` | Statement executions. |
+| `cosmosdb.stmt.request_charge` | Request units consumed. |
+| `cosmosdb.stmt.request_bytes` | Request payload bytes. |
+| `cosmosdb.stmt.response_bytes` | Response payload bytes. |
+| `cosmosdb.stmt.duration_ms_sum` | Total server execution time in milliseconds. |
+| `cosmosdb.stmt.throttled_calls` | Requests returning HTTP 429. |
+| `cosmosdb.stmt.error_calls` | Requests returning HTTP 5xx. |
+
+Average RU and duration are calculated downstream by dividing their sums by calls.
+
+Unmatched query records are held in memory for up to two minutes. Pending records and active statement series are each bounded to 100,000 by default. Event Hub replay or an ambiguous downstream retry can produce duplicate data.
+
+Optional collector controls:
+
+```bash
+QC_COSMOS_COLLECTION_INTERVAL=20s
+QC_COSMOS_CORRELATION_TTL=2m
+QC_COSMOS_MAX_PENDING_RECORDS=100000
+QC_COSMOS_MAX_SERIES_PER_INTERVAL=100000
+```
+
+## Other authentication methods
+
+<Expandable title="Shared access signature">
+  Use `cosmosdb-sas.yaml` when the collector cannot use an Azure managed identity. Create a separate Event Hub authorization rule with only `Listen`, then set `AZURE_EVENT_HUB_CONNECTION_STRING` to its entity-scoped connection string.
+
+  ```bash
+  docker run -d \
+    --name querycomment-cosmos-collector \
+    --restart unless-stopped \
+    --network host \
+    --env-file .env \
+    ghcr.io/querycomment/collector-cosmos:0.1.0 \
+    --config /etc/querycommentcol-cosmos/cosmosdb-sas.yaml
+  ```
+</Expandable>
+
+<Expandable title="Kubernetes workload identity">
+  Use `cosmosdb-workload-identity.yaml` and set `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, and `AZURE_FEDERATED_TOKEN_FILE`. Grant the workload identity `Azure Event Hubs Data Receiver` on the dedicated Event Hub.
+
+  ```bash
+  /querycommentcol-cosmos \
+    --config /etc/querycommentcol-cosmos/cosmosdb-workload-identity.yaml
+  ```
+</Expandable>
